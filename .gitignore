@@ -35,6 +35,10 @@ htmlcov/
 .tox/
 .nox/
 
+# Logs
+logs/
+*.log
+
 # Next.js / Node
 node_modules/
 .next/

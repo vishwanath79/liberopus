@@ -1,176 +1,239 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 import numpy as np
-import ollama
+import google.generativeai as genai
 from models import Book, Rating
 from datetime import datetime
 import json
 from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException
+from database import get_db, init_db
+import os
 
-MODEL_NAME = 'llama2:13b'  # Using llama2 13B model
+# Configure Gemini
+genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
+MODEL = genai.GenerativeModel('gemini-1.5-pro')
 
-class LlamaBookAnalyzer:
-    """
-    Analyzes technical books using Llama via Ollama to extract key information and insights.
-    Handles the deep analysis of book content, technical requirements, and learning outcomes.
-    """
-    def __init__(self, model_name: str = MODEL_NAME):
-        self.model_name = model_name
+# Create FastAPI app instance
+app = FastAPI(title="Book Recommender API")
 
-    def analyze_book_content(self, description: str) -> dict:
-        """
-        Performs comprehensive analysis of book description using LLM.
-        
-        Args:
-            description (str): Raw book description text
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+
+MODEL_NAME = 'llama3:13b'  # Using llama2 13B model
+
+def convert_db_book_to_model(book_row) -> Book:
+    """Convert a database row to a Book model."""
+    return Book(
+        id=str(book_row["id"]),
+        title=book_row["title"],
+        author=book_row["author"],
+        description=book_row["description"],
+        technical_level=book_row["technical_level"],
+        avg_rating=float(book_row["avg_rating"]) if "avg_rating" in book_row else 0.0,
+        rating_count=int(book_row["rating_count"]) if "rating_count" in book_row else 0,
+        page_count=book_row["page_count"],
+        publication_year=book_row["publication_year"],
+        topics=["General"],
+        categories=["General"]
+    )
+
+# API Routes
+@app.get("/")
+async def root():
+    return {"message": "Book Recommender API is running"}
+
+@app.get("/books")
+async def get_books():
+    """Get all books from the database."""
+    try:
+        with get_db() as db:
+            cursor = db.execute("""
+                SELECT b.*, 
+                       COALESCE(AVG(r.rating), 0) as avg_rating,
+                       COUNT(r.id) as rating_count
+                FROM books b
+                LEFT JOIN ratings r ON b.id = r.book_id
+                GROUP BY b.id
+                ORDER BY b.id DESC
+            """)
+            books = cursor.fetchall()
             
-        Returns:
-            dict: Analysis results containing topics, level, and outcomes
-        """
-        system_prompt = """You are a technical book analyzer. Analyze the given book description and extract:
-        1. Main technical topics (list of strings)
-        2. Required experience level (string: 'beginner', 'intermediate', or 'advanced')
-        3. Key learning outcomes (list of strings)
-        
-        Format your response as a JSON object with these exact keys:
-        {
-            "topics": [],
-            "level": "",
-            "learning_outcomes": []
-        }
-        """
-        
-        try:
-            response = ollama.chat(model=self.model_name, messages=[
-                {
-                    'role': 'system',
-                    'content': system_prompt
-                },
-                {
-                    'role': 'user',
-                    'content': description
-                }
-            ])
-            
-            # Parse the response as JSON
-            result = json.loads(response['message']['content'])
-            return result
-        except Exception as e:
-            print(f"Error analyzing book content: {e}")
+            # Convert SQLite Row objects to Book models
             return {
-                "topics": [],
-                "level": "intermediate",
-                "learning_outcomes": []
+                "books": [convert_db_book_to_model(book) for book in books]
             }
+    except Exception as e:
+        print(f"Error loading books: {str(e)}")  # Add logging
+        raise HTTPException(status_code=500, detail=str(e))
 
-class SemanticMatcher:
-    """
-    Handles semantic matching of books using Llama embeddings via Ollama.
-    Enables finding similar books based on content and technical concepts.
-    """
-    def __init__(self, model_name: str = MODEL_NAME):
-        self.model_name = model_name
-        
-    def generate_embeddings(self, text: str) -> np.ndarray:
-        """
-        Generates vector embeddings for book descriptions using Ollama.
-        
-        Args:
-            text (str): Book description or query text
+@app.get("/remove-duplicates")
+async def remove_duplicates():
+    """Remove duplicate books from the database based on title and author."""
+    try:
+        # Get all books
+        with get_db() as db:
+            # Get all books
+            cursor = db.execute("""
+                SELECT id, title, author 
+                FROM books 
+                ORDER BY id
+            """)
+            all_books = cursor.fetchall()
             
-        Returns:
-            np.ndarray: Vector embedding representation
-        """
-        try:
-            response = ollama.embeddings(model=self.model_name, prompt=text)
-            return np.array(response['embedding'])
-        except Exception as e:
-            print(f"Error generating embeddings: {e}")
-            # Return a zero vector as fallback
-            return np.zeros(4096)  # Llama2 embedding size
+            # Create a dictionary to track unique books
+            unique_books = {}
+            duplicates = []
+            
+            # Find duplicates
+            for book in all_books:
+                key = (book[1].lower().strip(), book[2].lower().strip())  # title, author
+                if key in unique_books:
+                    # This is a duplicate - keep the one with lower ID
+                    original_id = unique_books[key]
+                    duplicate_id = book[0]
+                    duplicates.append({
+                        'duplicate_id': duplicate_id,
+                        'original_id': original_id
+                    })
+                else:
+                    unique_books[key] = book[0]  # id
+            
+            # Update ratings to point to original books
+            for dup in duplicates:
+                db.execute("""
+                    UPDATE ratings 
+                    SET book_id = ? 
+                    WHERE book_id = ?
+                """, (dup['original_id'], dup['duplicate_id']))
+                
+                # Delete duplicate book
+                db.execute("DELETE FROM books WHERE id = ?", (dup['duplicate_id'],))
+            
+            db.commit()
+            
+            return {
+                "message": f"Removed {len(duplicates)} duplicate books",
+                "duplicates_removed": len(duplicates)
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to remove duplicates: {str(e)}")
+
+class RecommendationEngine:
+    """Book recommendation engine using Gemini for content analysis and recommendations."""
     
-    def find_similar_books(self, query_embedding: np.ndarray, book_embeddings: List[np.ndarray], n_results: int = 5) -> List[int]:
-        """
-        Finds similar books using cosine similarity between embeddings.
-        
-        Args:
-            query_embedding (np.ndarray): Embedding of query book
-            book_embeddings (List[np.ndarray]): List of book embeddings to compare against
-            n_results (int): Number of similar books to return
-            
-        Returns:
-            List[int]: Indices of most similar books
-        """
+    def __init__(self):
+        self.model = MODEL
+    
+    def analyze_book_content(self, book: Book) -> str:
+        """Analyze book content using Gemini."""
         try:
-            # Normalize embeddings for cosine similarity
-            query_norm = query_embedding / np.linalg.norm(query_embedding)
-            book_norms = [emb / np.linalg.norm(emb) for emb in book_embeddings]
+            prompt = f"""
+            Analyze this book and extract key topics and themes:
+            Title: {book.title}
+            Author: {book.author}
+            Description: {book.description}
             
-            # Calculate cosine similarities
-            similarities = [np.dot(query_norm, book_norm) for book_norm in book_norms]
+            Return your analysis as a JSON string with these keys:
+            - topics: list of main topics
+            - themes: list of major themes
+            - target_audience: string describing ideal reader
+            """
             
-            # Get indices of top similar books
-            return np.argsort(similarities)[-n_results:][::-1].tolist()
+            response = self.model.generate_content(prompt)
+            return response.text
         except Exception as e:
-            print(f"Error finding similar books: {e}")
-            return list(range(min(n_results, len(book_embeddings))))
-
-class LlamaRecommender:
-    """
-    Core recommendation engine using Llama for personalized book suggestions.
-    Combines user history, ratings, and book content for intelligent recommendations.
-    """
-    def __init__(self, model_name: str = MODEL_NAME):
-        self.model_name = model_name
-        self.matcher = SemanticMatcher(model_name)
-        
-    def generate_recommendation(self, user_books: List[Book], user_ratings: Dict[str, int], available_books: List[Book] = None) -> List[Book]:
-        """
-        Generates personalized book recommendations based on user history.
-        
-        Args:
-            user_books (List[Book]): User's reading history
-            user_ratings (Dict[str, int]): User's book ratings
-            available_books (List[Book]): Pool of available books to recommend from
-            
-        Returns:
-            List[Book]: Recommended books
-        """
+            print(f"Error analyzing book: {str(e)}")
+            return json.dumps({
+                "topics": ["General"],
+                "themes": ["General"],
+                "target_audience": "General readers"
+            })
+    
+    def get_recommendations(self, user_books: List[Book], available_books: List[Book], user_ratings: Dict[str, int], num_recommendations: int = 5) -> List[Book]:
+        """Get book recommendations using Gemini."""
         try:
-            if not user_books or not available_books:
-                return available_books[:5] if available_books else []
-
-            # Create a combined profile from highly rated books (rating >= 4)
-            good_books = [book for book in user_books 
-                         if user_ratings.get(book.id, 0) >= 4]
+            # Filter out books the user has already rated
+            unrated_books = [book for book in available_books if str(book.id) not in user_ratings]
             
-            if not good_books:
-                return available_books[:5]
+            if not unrated_books:
+                return []
+            
+            # Get highly rated books (rating >= 4)
+            liked_books = [book for book in user_books if user_ratings.get(str(book.id), 0) >= 4]
+            
+            if not liked_books:
+                # If no highly rated books, return top rated unread books
+                return sorted(unrated_books, key=lambda x: x.avg_rating, reverse=True)[:num_recommendations]
+            
+            # Create prompt for Gemini
+            prompt = f"""
+            Based on these books the user likes:
+            {', '.join([f"'{book.title}' by {book.author}" for book in liked_books])}
+            
+            Rank these unread books from most to least recommended (return just the numbers in order):
+            {', '.join([f"{i+1}. '{book.title}' by {book.author}" for i, book in enumerate(unrated_books)])}
+            
+            Return only the numbers in order, separated by commas.
+            """
+            
+            response = self.model.generate_content(prompt)
+            rankings = [int(x.strip()) for x in response.text.split(',')]
+            
+            # Sort books based on Gemini's rankings
+            recommended_books = []
+            for rank in rankings[:num_recommendations]:
+                recommended_books.append(unrated_books[rank-1])
+            
+            return recommended_books
+            
+        except Exception as e:
+            print(f"Error getting recommendations: {str(e)}")
+            # Fallback to rating-based recommendations
+            return sorted(unrated_books, key=lambda x: x.avg_rating, reverse=True)[:num_recommendations]
 
-            # Generate embeddings for the user's profile
-            profile_text = " ".join([
-                f"Title: {book.title} Description: {book.description}"
-                for book in good_books
-            ])
-            profile_embedding = self.matcher.generate_embeddings(profile_text)
+# Initialize recommendation engine
+recommender = RecommendationEngine()
 
-            # Generate embeddings for available books
-            book_embeddings = [
-                self.matcher.generate_embeddings(
-                    f"Title: {book.title} Description: {book.description}"
-                )
-                for book in available_books
-            ]
-
-            # Find similar books
-            similar_indices = self.matcher.find_similar_books(
-                profile_embedding, book_embeddings
+@app.post("/get-recommendations")
+async def get_recommendations(request: RecommendationRequest):
+    """Get personalized book recommendations."""
+    try:
+        with get_db() as db:
+            # Get all available books
+            cursor = db.execute("""
+                SELECT b.*, 
+                       COALESCE(AVG(r.rating), 0) as avg_rating,
+                       COUNT(r.id) as rating_count
+                FROM books b
+                LEFT JOIN ratings r ON b.id = r.book_id
+                GROUP BY b.id
+            """)
+            all_books = cursor.fetchall()
+            
+            # Convert to Book models
+            available_books = [convert_db_book_to_model(book) for book in all_books]
+            
+            # Get user's rated books
+            rated_books = [book for book in available_books if str(book.id) in request.user_ratings]
+            
+            # Get recommendations using Gemini
+            recommendations = recommender.get_recommendations(
+                user_books=rated_books,
+                available_books=available_books,
+                user_ratings=request.user_ratings
             )
-
-            # Return recommended books
-            return [available_books[i] for i in similar_indices]
-        except Exception as e:
-            print(f"Error generating recommendations: {e}")
-            return available_books[:5] if available_books else []
+            
+            return {"recommendations": recommendations}
+            
+    except Exception as e:
+        print(f"Error getting recommendations: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get recommendations: {str(e)}"
+        )
 
 class BookSummarizer:
     """
@@ -237,3 +300,111 @@ class BookSummarizer:
                 "prerequisites": [],
                 "target_audience": book.technical_level
             }
+
+# Add test data function
+def add_test_book():
+    """Add a test book to the database."""
+    try:
+        with get_db() as db:
+            db.execute("""
+                INSERT OR IGNORE INTO books (
+                    title, author, description, technical_level, 
+                    page_count, publication_year
+                ) VALUES (
+                    'Python Deep Learning', 
+                    'John Smith',
+                    'A comprehensive guide to deep learning with Python, covering neural networks, TensorFlow, and PyTorch.',
+                    'intermediate',
+                    400,
+                    2023
+                )
+            """)
+            db.commit()
+    except Exception as e:
+        print(f"Error adding test book: {str(e)}")
+
+# Add test book route
+@app.get("/add-test-book")
+async def create_test_book():
+    """Add a test book to the database."""
+    try:
+        add_test_book()
+        return {"message": "Test book added successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class AddBookRequest(BaseModel):
+    """Request model for adding a book"""
+    title: str
+    author: str
+    description: Optional[str] = None
+    technical_level: Optional[str] = "intermediate"
+    page_count: Optional[int] = None
+    publication_year: Optional[int] = None
+
+@app.post("/add-book")
+async def add_book(book_data: AddBookRequest):
+    """Add a new book to the database."""
+    try:
+        with get_db() as db:
+            cursor = db.execute("""
+                INSERT INTO books (
+                    title, author, description, technical_level, 
+                    page_count, publication_year
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    book_data.title,
+                    book_data.author,
+                    book_data.description,
+                    book_data.technical_level,
+                    book_data.page_count,
+                    book_data.publication_year
+                ))
+            db.commit()
+            
+            # Get the inserted book
+            book_id = cursor.lastrowid
+            cursor = db.execute("SELECT * FROM books WHERE id = ?", (book_id,))
+            book = cursor.fetchone()
+            
+            return {"message": "Book added successfully", "book": convert_db_book_to_model(book)}
+    except Exception as e:
+        print(f"Error adding book: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/submit-rating")
+async def submit_rating(rating_data: Rating):
+    """Submit a rating for a book."""
+    try:
+        with get_db() as db:
+            db.execute("""
+                INSERT INTO ratings (book_id, rating, timestamp)
+                VALUES (?, ?, ?)
+            """, (rating_data.book_id, rating_data.rating, rating_data.timestamp))
+            db.commit()
+            return {"message": "Rating submitted successfully"}
+    except Exception as e:
+        print(f"Error submitting rating: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/ratings")
+async def get_ratings():
+    """Get all ratings from the database."""
+    try:
+        with get_db() as db:
+            cursor = db.execute("SELECT * FROM ratings")
+            ratings = cursor.fetchall()
+            return {
+                "ratings": [
+                    {
+                        "id": rating["id"],
+                        "book_id": str(rating["book_id"]),
+                        "rating": rating["rating"],
+                        "timestamp": rating["timestamp"]
+                    }
+                    for rating in ratings
+                ]
+            }
+    except Exception as e:
+        print(f"Error getting ratings: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

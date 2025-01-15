@@ -1,39 +1,24 @@
-from typing import List
-from datetime import datetime
 from pydantic import BaseModel
+from typing import List, Optional
+from datetime import datetime
 
 class Book(BaseModel):
-    """
-    Represents a book with its metadata and technical details.
-    This class is used throughout the recommendation system to store and manage book information.
-    
-    Attributes:
-        id (str): Unique identifier for the book
-        title (str): Book title
-        author (str): Book author name
-        categories (List[str]): List of categories/genres the book belongs to
-        technical_level (str): Indicates difficulty level (beginner/intermediate/advanced)
-        topics (List[str]): Specific technical topics covered in the book
-        avg_rating (float): Average rating from all readers (0.0 to 5.0)
-        page_count (int): Total number of pages
-        publication_year (int): Year the book was published
-        description (str): Full book description/summary
-    """
+    """Pydantic model for books"""
     id: str
     title: str
     author: str
-    categories: List[str]
-    technical_level: str  # beginner/intermediate/advanced
-    topics: List[str]
-    avg_rating: float
-    page_count: int
-    publication_year: int
-    description: str
+    description: Optional[str] = None
+    technical_level: Optional[str] = "intermediate"
+    avg_rating: Optional[float] = 0.0
+    page_count: Optional[int] = None
+    publication_year: Optional[int] = None
+    topics: List[str] = ["General"]
+    categories: List[str] = ["General"]
+    rating_count: Optional[int] = 0
 
 class Rating(BaseModel):
-    """
-    Represents a user's rating of a book with timestamp.
-    """
+    """Pydantic model for book ratings"""
+    id: Optional[int] = None
     book_id: str
-    rating: int  # 1-5 scale
-    timestamp: datetime 
+    rating: int
+    timestamp: str 

@@ -6,13 +6,20 @@ export interface Book {
     categories: string[];
     technical_level: string;
     topics: string[];
+    description: string;
     avg_rating: number;
     page_count: number;
     publication_year: number;
-    description: string;
 }
 
 export interface Rating {
+    book_id: string;
+    rating: number;
+    timestamp: string;
+}
+
+export interface DBRating {
+    id: number;
     book_id: string;
     rating: number;
     timestamp: string;

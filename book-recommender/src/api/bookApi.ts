@@ -1,5 +1,5 @@
 // API client for interacting with our FastAPI backend
-import { Book, RecommendationRequest } from '../types/types';
+import { Book, RecommendationRequest, Rating } from '../types/types';
 
 const API_BASE_URL = 'http://localhost:8000';
 
@@ -12,15 +12,40 @@ const handleResponse = async (response: Response) => {
     return response.json();
 };
 
+interface BookRequest {
+    title: string;
+    author: string;
+    categories: string[];
+    technical_level: string;
+    topics: string[];
+    description: string;
+    avg_rating: number;
+    page_count: number;
+    publication_year: number;
+}
+
 export const bookApi = {
     // Analyze a book's content
-    analyzeBook: async (book: Omit<Book, 'id'>) => {
-        const response = await fetch(`${API_BASE_URL}/analyze-book`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(book),
-        });
-        return handleResponse(response);
+    analyzeBook: async (bookData: BookRequest) => {
+        try {
+            const response = await fetch('http://localhost:8000/add-book', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(bookData)
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to add book');
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('Error in analyzeBook:', error);
+            throw error;
+        }
     },
 
     // Find similar books
@@ -32,26 +57,52 @@ export const bookApi = {
     },
 
     // Get personalized recommendations
-    getRecommendations: async (request: RecommendationRequest) => {
-        const response = await fetch(`${API_BASE_URL}/get-recommendations`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(request),
-        });
-        return handleResponse(response);
+    getRecommendations: async (data: { user_history: string[], user_ratings: { [key: string]: number } }) => {
+        try {
+            const response = await fetch('http://localhost:8000/get-recommendations', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to get recommendations');
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('Error in getRecommendations:', error);
+            throw error;
+        }
     },
 
     // Submit a book rating
     submitRating: async (bookId: string, rating: number) => {
-        const response = await fetch(`${API_BASE_URL}/submit-rating`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                book_id: bookId,
-                rating,
-                timestamp: new Date().toISOString()
-            }),
-        });
-        return handleResponse(response);
+        try {
+            const response = await fetch('http://localhost:8000/submit-rating', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    book_id: bookId,
+                    rating: rating,
+                    timestamp: new Date().toISOString()
+                })
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to submit rating');
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('Error in submitRating:', error);
+            throw error;
+        }
     },
 };
