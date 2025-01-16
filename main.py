@@ -31,7 +31,7 @@ def convert_db_book_to_model(book_row) -> Book:
         author=book_row["author"],
         description=book_row["description"],
         technical_level=book_row["technical_level"],
-        avg_rating=float(book_row["avg_rating"]) if "avg_rating" in book_row else 0.0,
+        average_rating=float(book_row["average_rating"]) if "average_rating" in book_row else 0.0,
         rating_count=int(book_row["rating_count"]) if "rating_count" in book_row else 0,
         page_count=book_row["page_count"],
         publication_year=book_row["publication_year"],
@@ -51,7 +51,7 @@ async def get_books():
         with get_db() as db:
             cursor = db.execute("""
                 SELECT b.*, 
-                       COALESCE(AVG(r.rating), 0) as avg_rating,
+                       COALESCE(AVG(r.rating), 0) as average_rating,
                        COUNT(r.id) as rating_count
                 FROM books b
                 LEFT JOIN ratings r ON b.id = r.book_id
@@ -166,7 +166,7 @@ class RecommendationEngine:
             
             if not liked_books:
                 # If no highly rated books, return top rated unread books
-                return sorted(unrated_books, key=lambda x: x.avg_rating, reverse=True)[:num_recommendations]
+                return sorted(unrated_books, key=lambda x: x.average_rating, reverse=True)[:num_recommendations]
             
             # Create prompt for Gemini
             prompt = f"""
@@ -271,20 +271,20 @@ class BookSummarizer:
         
         try:
             book_content = f"""
-            Title: {book.title}
-            Author: {book.author}
+        Title: {book.title}
+        Author: {book.author}
             Technical Level: {book.technical_level}
             Topics: {', '.join(book.topics)}
-            Description: {book.description}
-            """
-            
-            response = ollama.chat(model=self.model_name, messages=[
-                {
-                    'role': 'system',
-                    'content': system_prompt
-                },
-                {
-                    'role': 'user',
+        Description: {book.description}
+        """
+        
+        response = ollama.chat(model=self.model_name, messages=[
+            {
+                'role': 'system',
+                'content': system_prompt
+            },
+            {
+                'role': 'user',
                     'content': book_content
                 }
             ])

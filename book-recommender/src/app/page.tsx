@@ -1,27 +1,60 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { Book, DBRating } from '../types/types';
-import { bookApi } from '../api/bookApi';
-import { BookCard } from '../components/BookCard';
-import { AddBookForm } from '../components/AddBookForm';
-import { SearchBar } from '../components/SearchBar';
+import { useState, useMemo, useEffect } from 'react';
+import { Book } from '../types/types';
 import { Footer } from '../components/Footer';
+import { CategoryFilter } from '../components/CategoryFilter';
+
+interface DBRating {
+    id: number;
+    book_id: string;
+    rating: number;
+    timestamp: string;
+}
 
 export default function Home() {
     const [books, setBooks] = useState<Book[]>([]);
     const [recommendations, setRecommendations] = useState<Book[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [ratingStatus, setRatingStatus] = useState<{message: string, isError: boolean} | null>(null);
     const [userRatings, setUserRatings] = useState<{[key: string]: number}>({});
-    
-    // Refs for scrolling
-    const booksRef = useRef<HTMLDivElement>(null);
+    const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+    const [dismissedBooks, setDismissedBooks] = useState<Set<string>>(new Set());
 
+    // Initialize data loading
+    useEffect(() => {
+        const initializeData = async () => {
+            await Promise.all([
+                loadBooks(),
+                loadUserRatings()
+            ]);
+        };
+        initializeData();
+    }, []);
+
+    // Load books from API
+    const loadBooks = async () => {
+        try {
+            const response = await fetch('http://localhost:8000/books');
+            const data = await response.json();
+            setBooks(Array.isArray(data) ? data : []);
+            setError(null);
+        } catch (error) {
+            console.error('Failed to load books:', error);
+            setError('Failed to load books. Please try again later.');
+            setBooks([]);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Load user ratings from API
     const loadUserRatings = async () => {
         try {
             const response = await fetch('http://localhost:8000/ratings');
+            if (!response.ok) {
+                throw new Error('Failed to load user ratings');
+            }
             const data = await response.json();
             const ratings = data.ratings.reduce((acc: {[key: string]: number}, rating: DBRating) => {
                 acc[rating.book_id] = rating.rating;
@@ -31,109 +64,193 @@ export default function Home() {
             
             // Load recommendations if we have ratings
             if (Object.keys(ratings).length > 0) {
-                await loadRecommendations(ratings);
+                await loadRecommendations();
             }
         } catch (error) {
             console.error('Failed to load user ratings:', error);
         }
     };
 
-    const loadBooks = async () => {
+    // Load recommendations from API
+    const loadRecommendations = async () => {
         try {
-            const response = await fetch('http://localhost:8000/books');
-            const data = await response.json();
-            setBooks(data.books || []);
-            setError(null);
-        } catch (error) {
-            console.error('Failed to load books:', error);
-            setError('Failed to load books. Please try again later.');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const loadRecommendations = async (ratings = userRatings) => {
-        try {
-            const response = await bookApi.getRecommendations({
-                user_history: Object.keys(ratings),
-                user_ratings: ratings
+            const response = await fetch('http://localhost:8000/get-recommendations', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    user_history: Object.keys(userRatings),
+                    user_ratings: userRatings
+                }),
             });
-            if (response.recommendations) {
-                setRecommendations(response.recommendations);
-            }
+            const data = await response.json();
+            setRecommendations(data.recommendations || []);
         } catch (error) {
             console.error('Failed to load recommendations:', error);
+            setRecommendations([]);
         }
     };
 
-    useEffect(() => {
-        const initializeData = async () => {
-            await loadBooks();
-            await loadUserRatings();
-        };
-        initializeData();
-    }, []);
-
+    // Handle book rating submission
     const handleRatingSubmit = async (bookId: string, rating: number) => {
         try {
-            setRatingStatus({ message: 'Submitting rating...', isError: false });
-            await bookApi.submitRating(bookId, rating);
+            console.log('Submitting rating:', { bookId, rating }); // Debug log
+            const response = await fetch('http://localhost:8000/ratings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ book_id: bookId, rating }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('Rating submission failed:', errorData); // Debug log
+                throw new Error(`Failed to submit rating: ${errorData.detail}`);
+            }
+
+            // Update local state
+            setUserRatings(prev => ({ ...prev, [bookId]: rating }));
             
-            // Update user ratings
-            const newRatings = {
-                ...userRatings,
-                [bookId]: rating
-            };
-            setUserRatings(newRatings);
-
-            setRatingStatus({ message: 'Rating submitted successfully!', isError: false });
-
             // Load new recommendations
-            await loadRecommendations(newRatings);
-
-            // Clear success message after 3 seconds
-            setTimeout(() => setRatingStatus(null), 3000);
+            await loadRecommendations();
         } catch (error) {
             console.error('Failed to submit rating:', error);
-            setRatingStatus({
-                message: 'Failed to submit rating. Please try again.',
-                isError: true
-            });
-            setTimeout(() => setRatingStatus(null), 5000);
+            setError('Failed to submit rating. Please try again.');
         }
     };
 
-    const handleBookSelect = (book: Book) => {
-        // Scroll to the book's position
-        const bookElements = booksRef.current?.getElementsByClassName('book-card');
-        if (bookElements) {
-            for (let i = 0; i < bookElements.length; i++) {
-                const element = bookElements[i] as HTMLElement;
-                if (element.dataset.bookId === book.id) {
-                    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    // Highlight the book card temporarily
-                    element.classList.add('highlight-card');
-                    setTimeout(() => element.classList.remove('highlight-card'), 2000);
-                    break;
-                }
+    // Handle dismissing a book
+    const handleDismissBook = async (bookId: string) => {
+        try {
+            const response = await fetch('http://localhost:8000/dismiss-book', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ book_id: bookId }),
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to dismiss book');
             }
+
+            // Update local state
+            setDismissedBooks(prev => new Set([...prev, bookId]));
+            
+            // Remove the book from recommendations
+            setRecommendations(prev => prev.filter(book => book.id !== bookId));
+            
+            // Load new recommendations
+            await loadRecommendations();
+        } catch (error) {
+            console.error('Error dismissing book:', error);
+            setError('Failed to dismiss book');
         }
     };
+
+    // Handle category changes
+    const handleCategoryChange = (categories: string[]) => {
+        console.log('Selected categories:', categories);
+        setSelectedCategories(categories);
+    };
+
+    // Filter books based on selected categories
+    const filteredBooks = useMemo(() => {
+        let filtered = books.filter(book => !dismissedBooks.has(book.id));
+        if (selectedCategories.length > 0) {
+            filtered = filtered.filter(book =>
+                book.topics?.some(topic =>
+                    selectedCategories.some(category =>
+                        topic.toLowerCase() === category.toLowerCase()
+                    )
+                )
+            );
+        }
+        return filtered;
+    }, [books, dismissedBooks, selectedCategories]);
+
+    // Filter recommendations based on selected categories
+    const filteredRecommendations = useMemo(() => {
+        let filtered = recommendations.filter(book => !dismissedBooks.has(book.id));
+        if (selectedCategories.length > 0) {
+            filtered = filtered.filter(book =>
+                book.topics?.some(topic =>
+                    selectedCategories.some(category =>
+                        topic.toLowerCase() === category.toLowerCase()
+                    )
+                )
+            );
+        }
+        return filtered;
+    }, [recommendations, dismissedBooks, selectedCategories]);
+
+    interface BookCardProps {
+        book: Book;
+        showRating?: boolean;
+        onRatingSubmit?: (bookId: string, rating: number) => Promise<void>;
+        currentRating?: number;
+    }
+
+    const BookCard = ({ book, showRating = true, onRatingSubmit, currentRating = 0 }: BookCardProps) => (
+        <div className="bg-slate-800/50 rounded-lg shadow-lg p-6 mb-4 border border-slate-700/50 hover:border-indigo-500/50 transition-colors">
+            <div className="flex justify-between items-start">
+                <div>
+                    <h3 className="text-xl font-semibold mb-2 text-white">{book.title}</h3>
+                    <p className="text-gray-400 mb-2">by {book.author}</p>
+                </div>
+                <button
+                    onClick={() => handleDismissBook(book.id)}
+                    className="text-gray-500 hover:text-red-400 transition-colors"
+                    title="Dismiss book"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            {showRating && onRatingSubmit && (
+                <div className="flex items-center mb-2">
+                    <div className="flex">
+                        {[1, 2, 3, 4, 5].map((star) => (
+                            <button
+                                key={star}
+                                onClick={() => onRatingSubmit(book.id, star)}
+                                className={`text-2xl ${
+                                    star <= currentRating ? 'text-yellow-400' : 'text-gray-600'
+                                }`}
+                            >
+                                ★
+                            </button>
+                        ))}
+                    </div>
+                    <span className="text-gray-400 ml-2">
+                        ({book.average_rating.toFixed(1)})
+                    </span>
+                </div>
+            )}
+            <p className="text-gray-300 mb-2">{book.description}</p>
+            <div className="flex flex-wrap gap-2">
+                {book.topics.map((topic: string, index: number) => (
+                    <span
+                        key={index}
+                        className="bg-indigo-900/30 text-indigo-300 text-sm px-2 py-1 rounded border border-indigo-800/50"
+                    >
+                        {topic}
+                    </span>
+                ))}
+            </div>
+        </div>
+    );
 
     return (
         <div className="min-h-screen bg-background">
             {/* Hero Section */}
             <div className="hero-gradient">
                 <div className="max-w-7xl mx-auto py-20 px-4 text-center relative">
-                    <div className="absolute right-4 top-4">
-                        <SearchBar
-                            books={books}
-                            userRatings={userRatings}
-                            onBookSelect={handleBookSelect}
-                        />
-                    </div>
                     <h1 className="text-5xl font-bold mb-6">
-                         <span className="gradient-text">LIBER OPUS </span>
+                        <span className="gradient-text">LIBER OPUS</span>
                     </h1>
                     <p className="text-xl text-gray-300 mb-8">
                         Discover and rate books. Get personalized recommendations based on your interests.
@@ -141,66 +258,77 @@ export default function Home() {
                 </div>
             </div>
 
-            {/* Status Messages */}
-            {ratingStatus && (
-                <div className={`fixed top-4 right-4 p-4 rounded-md shadow-md ${
-                    ratingStatus.isError ? 'bg-red-900/50 text-red-200' : 'bg-green-900/50 text-green-200'
-                }`}>
-                    {ratingStatus.message}
-                </div>
-            )}
-
+            {/* Main Content */}
             <main className="max-w-7xl mx-auto py-12 px-4">
-                {/* Add Book Section */}
-                <section className="mb-16">
-                    <h2 className="text-3xl font-bold mb-8">Add New Book</h2>
-                    <AddBookForm onBookAdded={loadBooks} />
-                </section>
+                {/* Status Messages */}
+                {error && (
+                    <div className="bg-red-900/50 text-red-200 px-4 py-3 rounded mb-4">
+                        {error}
+                    </div>
+                )}
+
+                {/* Category Filter */}
+                <div className="mb-8">
+                    <CategoryFilter 
+                        onCategoriesChange={handleCategoryChange}
+                        categories={["Technical", "Non-Technical"]}
+                        selectedCategories={selectedCategories}
+                    />
+                </div>
 
                 {/* Recommendations Section */}
-                {recommendations.length > 0 && (
-                    <section className="mb-16 bg-indigo-900/30 rounded-lg p-8">
-                        <h2 className="text-3xl font-bold mb-8">
-                            <span className="bg-gradient-to-r from-indigo-400 to-purple-400 text-transparent bg-clip-text">
-                                Recommended for You
-                            </span>
-                            <span className="text-lg font-normal text-gray-400 ml-4">
-                                Based on {Object.keys(userRatings).length} rated books
-                            </span>
-                        </h2>
+                <section className="mb-16 bg-indigo-900/30 rounded-lg p-8">
+                    <h2 className="text-3xl font-bold mb-8">
+                        <span className="bg-gradient-to-r from-indigo-400 to-purple-400 text-transparent bg-clip-text">
+                            Recommended for You
+                        </span>
+                        <span className="text-lg font-normal text-gray-400 ml-4">
+                            {Object.keys(userRatings).length > 0 
+                                ? `Based on ${Object.keys(userRatings).length} rated books`
+                                : 'Rate some books to get personalized recommendations'}
+                        </span>
+                    </h2>
+                    {loading ? (
+                        <div className="text-center py-10 text-gray-400">Loading recommendations...</div>
+                    ) : filteredRecommendations.length > 0 ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {recommendations.map((book) => (
+                            {filteredRecommendations.map((book) => (
                                 <BookCard
                                     key={book.id}
                                     book={book}
                                     onRatingSubmit={handleRatingSubmit}
-                                    currentRating={userRatings[book.id]}
+                                    currentRating={userRatings[book.id] || 0}
                                 />
                             ))}
                         </div>
-                    </section>
-                )}
+                    ) : (
+                        <div className="text-center py-10 text-gray-400">
+                            {Object.keys(userRatings).length > 0 
+                                ? 'No recommendations available at the moment.'
+                                : 'Start rating books to get personalized recommendations!'}
+                        </div>
+                    )}
+                </section>
 
                 {/* All Books Section */}
-                <section ref={booksRef}>
-                    <h2 className="text-3xl font-bold mb-8">All Books</h2>
+                <section>
+                    <h2 className="text-3xl font-bold mb-8 text-white">All Books</h2>
                     {loading ? (
-                        <div className="text-center py-10">Loading books...</div>
-                    ) : error ? (
-                        <div className="text-center py-10 text-red-500">{error}</div>
-                    ) : books.length === 0 ? (
-                        <div className="text-center py-10 text-gray-400">No books available.</div>
-                    ) : (
+                        <div className="text-center py-10 text-gray-400">Loading books...</div>
+                    ) : filteredBooks.length > 0 ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {books.map((book) => (
-                                <div key={book.id} className="book-card" data-book-id={book.id}>
-                                    <BookCard
-                                        book={book}
-                                        onRatingSubmit={handleRatingSubmit}
-                                        currentRating={userRatings[book.id]}
-                                    />
-                                </div>
+                            {filteredBooks.map((book) => (
+                                <BookCard
+                                    key={book.id}
+                                    book={book}
+                                    onRatingSubmit={handleRatingSubmit}
+                                    currentRating={userRatings[book.id] || 0}
+                                />
                             ))}
+                        </div>
+                    ) : (
+                        <div className="text-center py-10 text-gray-400">
+                            No books found matching the selected categories.
                         </div>
                     )}
                 </section>
@@ -209,19 +337,18 @@ export default function Home() {
             <Footer />
 
             <style jsx global>{`
-                .highlight-card {
-                    animation: highlight 2s ease-in-out;
+                .bg-background {
+                    background-color: #0f172a;
+                    color: #e2e8f0;
                 }
-                
-                @keyframes highlight {
-                    0%, 100% {
-                        transform: scale(1);
-                        box-shadow: none;
-                    }
-                    50% {
-                        transform: scale(1.02);
-                        box-shadow: 0 0 20px rgba(99, 102, 241, 0.5);
-                    }
+                .hero-gradient {
+                    background: linear-gradient(to bottom, #1e293b, #0f172a);
+                }
+                .gradient-text {
+                    background: linear-gradient(to right, #60a5fa, #a78bfa);
+                    -webkit-background-clip: text;
+                    background-clip: text;
+                    color: transparent;
                 }
             `}</style>
         </div>

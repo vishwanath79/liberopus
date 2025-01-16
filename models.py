@@ -9,7 +9,7 @@ class Book(BaseModel):
     author: str
     description: Optional[str] = None
     technical_level: Optional[str] = "intermediate"
-    avg_rating: Optional[float] = 0.0
+    average_rating: Optional[float] = 0.0
     page_count: Optional[int] = None
     publication_year: Optional[int] = None
     topics: List[str] = ["General"]

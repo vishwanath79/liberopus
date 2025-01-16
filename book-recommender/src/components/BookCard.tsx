@@ -72,7 +72,7 @@ export const BookCard: React.FC<BookCardProps> = ({ book, onRatingSubmit, curren
                 
                 {/* Average Rating */}
                 <div className="mt-2 text-sm text-gray-400">
-                    Average rating: {book.avg_rating.toFixed(1)} ★
+                    Average rating: {book.average_rating.toFixed(1)} ★
                 </div>
             </div>
         </div>
