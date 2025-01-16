@@ -25,6 +25,12 @@ export interface DBRating {
     timestamp: string;
 }
 
+export interface WishlistItem extends Book {
+    notes?: string;
+    added_at: string;
+    display_order: number;
+}
+
 export interface RecommendationRequest {
     user_history: string[];
     user_ratings: { [key: string]: number };

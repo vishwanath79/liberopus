@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Union
 from datetime import datetime
 from database import get_db, init_db
 from models import Book, Rating
@@ -387,6 +387,11 @@ class DismissBookRequest(BaseModel):
     """Request model for dismissing a book"""
     book_id: str
 
+class WishlistRequest(BaseModel):
+    """Request model for wishlist operations"""
+    book_id: str
+    notes: Optional[str] = None
+
 @app.post("/dismiss-book")
 async def dismiss_book(request: DismissBookRequest):
     """Add a book to the dismissed list."""
@@ -525,4 +530,106 @@ async def get_recommendations(request: RecommendationRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get recommendations: {str(e)}"
-        ) 
+        )
+
+@app.get("/wishlist")
+async def get_wishlist():
+    """Get all books in the wishlist."""
+    try:
+        with get_db() as db:
+            cursor = db.execute("""
+                SELECT b.*, w.notes, w.timestamp, w.display_order
+                FROM books b
+                JOIN wishlists w ON b.id = w.book_id
+                ORDER BY w.display_order, w.timestamp DESC
+            """)
+            wishlist_books = cursor.fetchall()
+            
+            return {
+                "wishlist": [
+                    {
+                        **convert_db_book_to_model(book).dict(),
+                        "notes": book["notes"],
+                        "added_at": book["timestamp"],
+                        "display_order": book["display_order"]
+                    }
+                    for book in wishlist_books
+                ]
+            }
+    except Exception as e:
+        print(f"Error getting wishlist: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/wishlist/add")
+async def add_to_wishlist(request: WishlistRequest):
+    """Add a book to the wishlist."""
+    try:
+        with get_db() as db:
+            # Check if book exists
+            cursor = db.execute("SELECT id FROM books WHERE id = ?", (request.book_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Book not found")
+            
+            # Check if book is already in wishlist
+            cursor = db.execute("SELECT id FROM wishlists WHERE book_id = ?", (request.book_id,))
+            if cursor.fetchone():
+                raise HTTPException(status_code=400, detail="Book already in wishlist")
+            
+            # Get max display order
+            cursor = db.execute("SELECT MAX(display_order) as max_order FROM wishlists")
+            result = cursor.fetchone()
+            next_order = (result["max_order"] or 0) + 1
+            
+            # Add to wishlist
+            db.execute(
+                "INSERT INTO wishlists (book_id, notes, timestamp, display_order) VALUES (?, ?, ?, ?)",
+                (request.book_id, request.notes, datetime.now().isoformat(), next_order)
+            )
+            db.commit()
+            return {"message": "Book added to wishlist successfully"}
+    except Exception as e:
+        print(f"Error adding to wishlist: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/wishlist/remove/{book_id}")
+async def remove_from_wishlist(book_id: str):
+    """Remove a book from the wishlist."""
+    try:
+        print(f"Attempting to remove book {book_id} from wishlist")  # Debug log
+        with get_db() as db:
+            # First check if the book is in the wishlist
+            cursor = db.execute("SELECT book_id FROM wishlists WHERE book_id = ?", (book_id,))
+            if not cursor.fetchone():
+                print(f"Book {book_id} not found in wishlist")  # Debug log
+                raise HTTPException(status_code=404, detail="Book not found in wishlist")
+            
+            # Remove from wishlist
+            cursor = db.execute("DELETE FROM wishlists WHERE book_id = ?", (book_id,))
+            print(f"Deleted {cursor.rowcount} rows from wishlist")  # Debug log
+            
+            if cursor.rowcount == 0:
+                print(f"No rows were deleted for book {book_id}")  # Debug log
+                raise HTTPException(status_code=404, detail="Book not found in wishlist")
+            
+            db.commit()
+            print(f"Successfully removed book {book_id} from wishlist")  # Debug log
+            return {"message": "Book removed from wishlist successfully"}
+    except Exception as e:
+        print(f"Error removing book {book_id} from wishlist: {str(e)}")  # Debug log
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/wishlist/reorder")
+async def reorder_wishlist(orders: List[dict[str, Union[str, int]]]):
+    """Update the display order of wishlist items."""
+    try:
+        with get_db() as db:
+            for item in orders:
+                db.execute(
+                    "UPDATE wishlists SET display_order = ? WHERE book_id = ?",
+                    (item["order"], item["book_id"])
+                )
+            db.commit()
+            return {"message": "Wishlist reordered successfully"}
+    except Exception as e:
+        print(f"Error reordering wishlist: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e)) 

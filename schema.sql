@@ -22,4 +22,13 @@ CREATE TABLE IF NOT EXISTS dismissed_books (
     book_id TEXT NOT NULL,
     timestamp TEXT NOT NULL,
     FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS wishlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id TEXT NOT NULL,
+    notes TEXT,
+    timestamp TEXT NOT NULL,
+    display_order INTEGER DEFAULT 0,
+    FOREIGN KEY (book_id) REFERENCES books(id)
 ); 
