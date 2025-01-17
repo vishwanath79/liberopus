@@ -23,8 +23,23 @@ export const BookCard: React.FC<BookCardProps> = ({ book, onRatingSubmit, curren
     return (
         <div className="bg-card rounded-lg shadow-lg overflow-hidden transition-transform hover:scale-[1.02]">
             <div className="p-6">
-                <h3 className="text-xl font-bold text-foreground mb-2">{book.title}</h3>
-                <p className="text-gray-400 mb-4">by {book.author}</p>
+                <div className="flex-grow">
+                    <h3 className="text-lg font-semibold text-white mb-1">{book.title}</h3>
+                    <p className="text-sm text-gray-400">by {book.author}</p>
+                    {book.description && (
+                        <p className="text-sm text-gray-300 mt-2 line-clamp-3">{book.description}</p>
+                    )}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                        {book.topics.map((topic, index) => (
+                            <span
+                                key={index}
+                                className="bg-indigo-900/30 text-indigo-300 text-xs px-2 py-1 rounded border border-indigo-800/50"
+                            >
+                                {topic}
+                            </span>
+                        ))}
+                    </div>
+                </div>
                 
                 {/* Technical Level Badge */}
                 <div className="mb-4">
@@ -32,21 +47,6 @@ export const BookCard: React.FC<BookCardProps> = ({ book, onRatingSubmit, curren
                         {book.technical_level}
                     </span>
                 </div>
-                
-                {/* Topics */}
-                <div className="flex flex-wrap gap-2 mb-4">
-                    {book.topics.map((topic, index) => (
-                        <span 
-                            key={index}
-                            className="bg-gray-800 text-gray-300 px-2 py-1 rounded text-sm"
-                        >
-                            {topic}
-                        </span>
-                    ))}
-                </div>
-                
-                {/* Description */}
-                <p className="text-gray-300 mb-4 line-clamp-3">{book.description}</p>
                 
                 {/* Rating */}
                 <div className="flex items-center space-x-1">

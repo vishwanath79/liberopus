@@ -1,7 +1,8 @@
 // API client for interacting with our FastAPI backend
 import { Book, RecommendationRequest, Rating } from '../types/types';
 
-const API_BASE_URL = 'http://localhost:8000';
+// API configuration with environment variable support
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 // Helper function to handle API responses
 const handleResponse = async (response: Response) => {
@@ -105,4 +106,17 @@ export const bookApi = {
             throw error;
         }
     },
+};
+
+export const fetchBooks = async (): Promise<Book[]> => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/books`);
+        if (!response.ok) {
+            throw new Error('Failed to fetch books');
+        }
+        return response.json();
+    } catch (error) {
+        console.error('Error fetching books:', error);
+        throw error;
+    }
 };

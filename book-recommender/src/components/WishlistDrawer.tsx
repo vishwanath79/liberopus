@@ -46,6 +46,34 @@ export const WishlistDrawer = ({
         };
     }, [isOpen, onClose]);
 
+    // Export wishlist as CSV
+    const handleExport = () => {
+        // Create CSV content
+        const headers = ['Title', 'Author', 'Topics', 'Added Date', 'Notes'];
+        const rows = sortedItems.map(item => [
+            item.title,
+            item.author,
+            item.topics.join('; '),
+            new Date(item.added_at).toLocaleDateString(),
+            item.notes || ''
+        ]);
+        
+        const csvContent = [
+            headers.join(','),
+            ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+        ].join('\n');
+        
+        // Create and download file
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', `wishlist-${new Date().toISOString().split('T')[0]}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
     // Sort and filter wishlist items
     const sortedItems = useMemo(() => {
         let items = [...wishlistItems];
@@ -96,15 +124,26 @@ export const WishlistDrawer = ({
                                 ({wishlistItems.length} items)
                             </span>
                         </h2>
-                        <button
-                            onClick={onClose}
-                            className="text-gray-400 hover:text-white transition-colors"
-                            aria-label="Close wishlist"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                        </button>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={handleExport}
+                                className="text-gray-400 hover:text-white transition-colors"
+                                title="Export wishlist"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                </svg>
+                            </button>
+                            <button
+                                onClick={onClose}
+                                className="text-gray-400 hover:text-white transition-colors"
+                                aria-label="Close wishlist"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
                     </div>
 
                     {/* Filters and Sorting */}
