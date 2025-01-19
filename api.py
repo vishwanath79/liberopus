@@ -516,7 +516,8 @@ async def get_wishlist():
         return {"wishlist": [dict(item) for item in items]}
 
 @app.post("/wishlist/add")
-async def add_to_wishlist(book_id: str):
+async def add_to_wishlist(request: WishlistRequest):
+    """Add a book to the wishlist."""
     with get_db_cursor() as cursor:
         # Get the highest display_order
         cursor.execute("SELECT MAX(display_order) FROM wishlist")
@@ -524,13 +525,14 @@ async def add_to_wishlist(book_id: str):
         
         # Add the new item
         cursor.execute(
-            "INSERT INTO wishlist (book_id, display_order) VALUES (?, ?)",
-            (book_id, max_order + 1)
+            "INSERT INTO wishlist (book_id, display_order, notes) VALUES (?, ?, ?)",
+            (request.book_id, max_order + 1, request.notes)
         )
         return {"message": "Added to wishlist"}
 
 @app.delete("/wishlist/remove/{book_id}")
 async def remove_from_wishlist(book_id: str):
+    """Remove a book from the wishlist."""
     with get_db_cursor() as cursor:
         cursor.execute("DELETE FROM wishlist WHERE book_id = ?", (book_id,))
         return {"message": "Removed from wishlist"}
