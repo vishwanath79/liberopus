@@ -1,15 +1,16 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Dict
 from datetime import datetime
-from database import get_db, init_db
-from models import Book, Rating
+from .database import get_db, init_db
+from .models import Book, Rating
 from fastapi.middleware.cors import CORSMiddleware
 import csv
 import json
 from pathlib import Path
 import sqlite3
 import hashlib
+from .llm_recommender import get_personalized_recommendations
 
 app = FastAPI()
 
@@ -168,10 +169,6 @@ class Book(BaseModel):
     publication_year: Optional[int] = None
     page_count: Optional[int] = None
 
-class RatingRequest(BaseModel):
-    book_id: str
-    rating: int
-
 def convert_db_book_to_model(row: sqlite3.Row) -> Book:
     # Convert topics from JSON string to list
     topics = json.loads(row['topics']) if row['topics'] else []
@@ -264,7 +261,10 @@ async def add_book(book_data: AddBookRequest):
         print(f"Error adding book: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
+class RatingRequest(BaseModel):
+    """Request model for submitting a rating"""
+    book_id: str
+    rating: int
 
 @app.post("/ratings")
 async def submit_rating(request: RatingRequest):
@@ -426,132 +426,25 @@ async def get_dismissed_books():
         print(f"Error getting dismissed books: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-
-@app.post("/rate-book")
-async def rate_book(request: RatingRequest):
-    """Rate a book."""
-    try:
-        print(f"Processing rating request: {request}")  # Debug log
-        with get_db() as db:
-            # Check if book exists
-            cursor = db.execute("SELECT id FROM books WHERE id = ?", (request.book_id,))
-            if not cursor.fetchone():
-                raise HTTPException(status_code=404, detail="Book not found")
-            
-            # Check if rating is valid (1-5)
-            if not 1 <= request.rating <= 5:
-                raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
-            
-            # Check if rating already exists
-            cursor = db.execute(
-                "SELECT id FROM ratings WHERE book_id = ?",
-                (request.book_id,)
-            )
-            existing_rating = cursor.fetchone()
-            
-            if existing_rating:
-                # Update existing rating
-                db.execute(
-                    "UPDATE ratings SET rating = ?, timestamp = ? WHERE book_id = ?",
-                    (request.rating, datetime.now().isoformat(), request.book_id)
-                )
-            else:
-                # Add new rating
-                db.execute(
-                    "INSERT INTO ratings (book_id, rating, timestamp) VALUES (?, ?, ?)",
-                    (request.book_id, request.rating, datetime.now().isoformat())
-                )
-            
-            db.commit()
-            
-            # Calculate and update average rating for the book
-            cursor = db.execute(
-                """
-                SELECT AVG(rating) as avg_rating
-                FROM ratings
-                WHERE book_id = ?
-                """,
-                (request.book_id,)
-            )
-            avg_rating = cursor.fetchone()["avg_rating"]
-            
-            db.execute(
-                "UPDATE books SET average_rating = ? WHERE id = ?",
-                (avg_rating or 0, request.book_id)
-            )
-            db.commit()
-            
-            print(f"Successfully rated book {request.book_id} with rating {request.rating}")  # Debug log
-            return {
-                "message": "Rating submitted successfully",
-                "book_id": request.book_id,
-                "rating": request.rating,
-                "average_rating": avg_rating or 0
-            }
-            
-    except Exception as e:
-        print(f"Error rating book: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-    
 @app.post("/get-recommendations")
-async def get_recommendations(request: RecommendationRequest):
-    """Get personalized book recommendations."""
+async def get_recommendations(data: dict):
+    """Get personalized book recommendations based on user history and ratings."""
     try:
-        print("Received recommendation request:", request)
+        user_history = data.get("user_history", [])
+        user_ratings = data.get("user_ratings", {})
         
-        with get_db() as db:
-            # Get all books for Gemini to choose from
-            cursor = db.execute("SELECT * FROM books")
-            all_books = cursor.fetchall()
-            books_data = [dict(book) for book in all_books]
-            
-            # Get recommendations from Gemini
-            from .gemini import get_gemini_recommendations
-            recommended_books = get_gemini_recommendations(
-                request.user_ratings,
-                books_data
-            )
-            
-            if not recommended_books:
-                # Fallback to original recommendation logic
-                rated_books = list(request.user_ratings.keys())
-                if rated_books:
-                    query = """
-                        SELECT b.*, 
-                               COALESCE(AVG(r.rating), 0) as average_rating,
-                               COUNT(r.rating) as rating_count
-                        FROM books b
-                        LEFT JOIN ratings r ON b.id = r.book_id
-                        WHERE b.id NOT IN ({})
-                        GROUP BY b.id
-                        HAVING average_rating >= 3.5
-                        ORDER BY average_rating DESC, rating_count DESC
-                        LIMIT 5
-                    """.format(','.join('?' * len(rated_books)))
-                    cursor = db.execute(query, rated_books)
-                else:
-                    query = """
-                        SELECT b.*, 
-                               COALESCE(AVG(r.rating), 0) as average_rating,
-                               COUNT(r.rating) as rating_count
-                        FROM books b
-                        LEFT JOIN ratings r ON b.id = r.book_id
-                        GROUP BY b.id
-                        HAVING rating_count > 0
-                        ORDER BY average_rating DESC, rating_count DESC
-                        LIMIT 5
-                    """
-                    cursor = db.execute(query)
-                recommended_books = cursor.fetchall()
-            
-            recommendations = [convert_db_book_to_model(book) for book in recommended_books]
-            
-            print(f"Returning {len(recommendations)} recommendations")
-            return {"recommendations": recommendations}
-            
+        # Get recommendations using Gemini LLM
+        recommendations = get_personalized_recommendations(
+            user_history=user_history,
+            user_ratings=user_ratings,
+            num_recommendations=5
+        )
+        
+        return {
+            "recommendations": recommendations,
+            "message": "Successfully generated recommendations using Gemini"
+        }
     except Exception as e:
-        print(f"Error generating recommendations: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/wishlist")
@@ -654,4 +547,38 @@ async def reorder_wishlist(orders: List[dict[str, Union[str, int]]]):
             return {"message": "Wishlist reordered successfully"}
     except Exception as e:
         print(f"Error reordering wishlist: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/books")
+async def add_book(book: AddBookRequest):
+    """Add a new book to the database."""
+    try:
+        with get_db() as db:
+            # Generate book ID from title and author
+            book_id = str(hash(f"{book.title}{book.author}"))
+
+            # Check if book already exists
+            cursor = db.execute("SELECT id FROM books WHERE id = ?", (book_id,))
+            if cursor.fetchone():
+                raise HTTPException(status_code=400, detail="Book already exists")
+
+            # Insert new book with default values
+            cursor.execute("""
+                INSERT INTO books (id, title, author, description, average_rating, topics, publication_year, page_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                book_id,
+                book.title,
+                book.author,
+                "Added by user",  # Default description
+                0.0,  # Default rating
+                json.dumps(["Non-Technical"]),  # Default topic
+                datetime.now().year,  # Current year
+                0  # Default page count
+            ))
+            
+            db.commit()
+            return {"message": "Book added successfully", "book_id": book_id}
+    except Exception as e:
+        print(f"Error adding book: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e)) 

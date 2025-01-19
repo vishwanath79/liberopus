@@ -1,15 +1,12 @@
-// Define TypeScript interfaces for our data models
 export interface Book {
     id: string;
     title: string;
     author: string;
-    categories: string[];
-    technical_level: string;
-    topics: string[];
     description: string;
     average_rating: number;
-    page_count: number;
-    publication_year: number;
+    topics: string[];
+    publication_year?: number;
+    page_count?: number;
 }
 
 export interface Rating {

@@ -8,18 +8,10 @@ def get_db():
     return conn
 
 def init_db():
-    """Initialize the database."""
-    with get_db() as db:
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS ratings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                book_id TEXT NOT NULL,
-                rating INTEGER NOT NULL,
-                timestamp TEXT NOT NULL,
-                FOREIGN KEY (book_id) REFERENCES books (id)
-            )
-        """)
-        db.commit()
+    """Initialize the database with required tables."""
+    print("Initializing database...")
+    conn = get_db()
+    
     # Read schema
     schema_path = Path('schema.sql')
     if not schema_path.exists():
