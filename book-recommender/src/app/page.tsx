@@ -275,7 +275,7 @@ export default function Home() {
             <div className="bg-gray-800 shadow-lg">
                 <div className="max-w-7xl mx-auto px-4 py-6">
                     <div className="flex justify-between items-center">
-                        <h1 className="text-2xl font-bold">Book Recommender</h1>
+                        <h1 className="text-2xl font-bold">AI Book Recommender</h1>
                         <button
                             onClick={() => setIsWishlistOpen(true)}
                             className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors"
