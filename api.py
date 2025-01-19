@@ -498,56 +498,97 @@ async def rate_book(request: RatingRequest):
 async def get_recommendations(request: RecommendationRequest):
     """Get personalized book recommendations."""
     try:
-        print("Received recommendation request:", request)
+        print("Processing recommendation request:", request)
         
         with get_db() as db:
-            # Get all books for Gemini to choose from
-            cursor = db.execute("SELECT * FROM books")
-            all_books = cursor.fetchall()
-            books_data = [dict(book) for book in all_books]
+            rated_books = list(request.user_ratings.keys())
             
-            # Get recommendations from Gemini
-            from .gemini import get_gemini_recommendations
-            recommended_books = get_gemini_recommendations(
-                request.user_ratings,
-                books_data
-            )
+            # First, ensure all books have IDs
+            db.execute("""
+                UPDATE books 
+                SET id = LOWER(HEX(RANDOMBLOB(8)))
+                WHERE id IS NULL OR id = ''
+            """)
+            db.commit()
             
-            if not recommended_books:
-                # Fallback to original recommendation logic
-                rated_books = list(request.user_ratings.keys())
-                if rated_books:
-                    query = """
-                        SELECT b.*, 
-                               COALESCE(AVG(r.rating), 0) as average_rating,
-                               COUNT(r.rating) as rating_count
-                        FROM books b
-                        LEFT JOIN ratings r ON b.id = r.book_id
-                        WHERE b.id NOT IN ({})
-                        GROUP BY b.id
-                        HAVING average_rating >= 3.5
-                        ORDER BY average_rating DESC, rating_count DESC
-                        LIMIT 5
-                    """.format(','.join('?' * len(rated_books)))
-                    cursor = db.execute(query, rated_books)
-                else:
-                    query = """
-                        SELECT b.*, 
-                               COALESCE(AVG(r.rating), 0) as average_rating,
-                               COUNT(r.rating) as rating_count
-                        FROM books b
-                        LEFT JOIN ratings r ON b.id = r.book_id
-                        GROUP BY b.id
-                        HAVING rating_count > 0
-                        ORDER BY average_rating DESC, rating_count DESC
-                        LIMIT 5
-                    """
-                    cursor = db.execute(query)
-                recommended_books = cursor.fetchall()
-            
-            recommendations = [convert_db_book_to_model(book) for book in recommended_books]
-            
-            print(f"Returning {len(recommendations)} recommendations")
+            if rated_books:
+                placeholders = ','.join(['?' for _ in rated_books])
+                query = f"""
+                    SELECT 
+                        b.id,
+                        b.title,
+                        b.author,
+                        b.description,
+                        b.topics,
+                        b.publication_year,
+                        b.page_count,
+                        COALESCE(AVG(r.rating), 0) as average_rating
+                    FROM books b
+                    LEFT JOIN ratings r ON b.id = r.book_id
+                    WHERE b.id NOT IN ({placeholders})
+                    GROUP BY b.id
+                    HAVING average_rating >= 0
+                    ORDER BY average_rating DESC
+                    LIMIT 5
+                """
+                print(f"Executing query with rated_books: {rated_books}")  # Debug log
+                cursor = db.execute(query, rated_books)
+            else:
+                cursor = db.execute("""
+                    SELECT 
+                        b.id,
+                        b.title,
+                        b.author,
+                        b.description,
+                        b.topics,
+                        b.publication_year,
+                        b.page_count,
+                        COALESCE(AVG(r.rating), 0) as average_rating
+                    FROM books b
+                    LEFT JOIN ratings r ON b.id = r.book_id
+                    GROUP BY b.id
+                    ORDER BY RANDOM()
+                    LIMIT 5
+                """)
+
+            books = cursor.fetchall()
+            print(f"Found {len(books)} recommendations")  # Debug log
+
+            recommendations = []
+            for book in books:
+                book_dict = dict(book)
+                
+                # Ensure book has an ID
+                if not book_dict.get('id'):
+                    book_id = generate_book_id(book_dict['title'], book_dict['author'])
+                    db.execute(
+                        "UPDATE books SET id = ? WHERE title = ? AND author = ?",
+                        (book_id, book_dict['title'], book_dict['author'])
+                    )
+                    db.commit()
+                    book_dict['id'] = book_id
+
+                # Parse topics from JSON string if needed
+                if isinstance(book_dict.get('topics'), str):
+                    try:
+                        book_dict['topics'] = json.loads(book_dict['topics'])
+                    except json.JSONDecodeError:
+                        book_dict['topics'] = []
+                elif book_dict.get('topics') is None:
+                    book_dict['topics'] = []
+
+                recommendations.append({
+                    'id': book_dict['id'],
+                    'title': book_dict['title'],
+                    'author': book_dict['author'],
+                    'description': book_dict.get('description', ''),
+                    'topics': book_dict['topics'],
+                    'publication_year': book_dict.get('publication_year'),
+                    'page_count': book_dict.get('page_count'),
+                    'average_rating': float(book_dict['average_rating']) if book_dict.get('average_rating') else 0
+                })
+                print(f"Processed recommendation: {recommendations[-1]}")  # Debug log
+
             return {"recommendations": recommendations}
             
     except Exception as e:

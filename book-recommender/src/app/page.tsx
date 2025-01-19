@@ -114,10 +114,11 @@ export default function Home() {
 
     // Filter recommendations based on selected categories
     const filteredRecommendations = useMemo(() => {
-        return recommendations.filter(book => 
+        return recommendations.filter((book: Book) => 
+            book && book.id && 
             !dismissedBooks.has(book.id) &&
             (!selectedCategories.length || 
-             book.topics.some(topic => selectedCategories.includes(topic)))
+             book.topics?.some(topic => selectedCategories.includes(topic)))
         );
     }, [recommendations, dismissedBooks, selectedCategories]);
 
@@ -164,7 +165,7 @@ export default function Home() {
                 throw new Error('Failed to load user ratings');
             }
             const data = await response.json();
-            const ratings = data.ratings.reduce((acc: {[key: string]: number}, rating: any) => {
+            const ratings = data.ratings.reduce((acc: {[key: string]: number}, rating: { book_id: string; rating: number }) => {
                 acc[rating.book_id] = rating.rating;
                 return acc;
             }, {});
@@ -179,42 +180,65 @@ export default function Home() {
         }
     };
 
-    // Load recommendations from API
+    // Load recommendations from API with retries
     const loadRecommendations = async () => {
-        try {
-            setLoadingRecommendations(true);
-            console.log('Sending user ratings:', userRatings);
-            
-            const response = await fetch('http://localhost:8000/get-recommendations', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    user_history: [],
-                    user_ratings: userRatings
-                })
-            });
-            
-            if (!response.ok) {
-                throw new Error(`Failed to load recommendations: ${response.status}`);
+        const maxRetries = 5;
+        const baseDelay = 5000;
+        let attempt = 0;
+
+        while (attempt < maxRetries) {
+            try {
+                setLoadingRecommendations(true);
+                console.log(`Attempt ${attempt + 1} of ${maxRetries} to load recommendations`);
+                console.log('Current user ratings:', userRatings);
+
+                const response = await fetch('http://localhost:8000/get-recommendations', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        user_history: Object.keys(userRatings),
+                        user_ratings: userRatings
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Failed to load recommendations: ${response.status}`);
+                }
+
+                const data = await response.json();
+                console.log('Raw recommendations response:', data);
+
+                if (data.recommendations && Array.isArray(data.recommendations)) {
+                    // Ensure each recommendation has required fields
+                    const validRecommendations = data.recommendations.filter(book => 
+                        book && book.id && book.title && book.author
+                    );
+                    console.log('Setting valid recommendations:', validRecommendations);
+                    setRecommendations(validRecommendations);
+                    setError(null);
+                    return;
+                } else {
+                    console.warn('Unexpected recommendations format:', data);
+                    throw new Error('Invalid recommendations format');
+                }
+            } catch (error) {
+                console.error(`Attempt ${attempt + 1} failed:`, error);
+                attempt++;
+                
+                if (attempt === maxRetries) {
+                    console.error('All retry attempts failed');
+                    setError('Failed to load recommendations. Please try again later.');
+                    setRecommendations([]);
+                } else {
+                    const delay = baseDelay * Math.pow(2, attempt - 1);
+                    console.log(`Waiting ${delay}ms before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            } finally {
+                setLoadingRecommendations(false);
             }
-            
-            const data = await response.json();
-            console.log('Received recommendations:', data);
-            
-            if (data.recommendations && data.recommendations.length > 0) {
-                setRecommendations(data.recommendations);
-            } else {
-                console.log('No recommendations received');
-                setRecommendations([]);
-            }
-            
-        } catch (error) {
-            console.error('Failed to load recommendations:', error);
-            setError('Failed to load recommendations');
-        } finally {
-            setLoadingRecommendations(false);
         }
     };
 
@@ -236,47 +260,59 @@ export default function Home() {
     };
 
     // Handle rating submission
-    // ... rest of the imports and code ...
+    const handleRatingSubmit = async (bookId: string, rating: number) => {
+        console.log('Starting rating submission:', { bookId, rating });
+        setRatingStatus('submitting');
+        try {
+            const response = await fetch('http://localhost:8000/ratings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ book_id: bookId, rating }),
+            });
 
-// Handle rating submission
-const handleRatingSubmit = async (bookId: string, rating: number) => {
-    setRatingStatus('submitting');
-    try {
-        const response = await fetch('http://localhost:8000/ratings', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ book_id: bookId, rating }),
-        });
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                console.error('Failed to submit rating:', errorData);
+                setRatingStatus('error');
+                return;
+            }
 
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            console.error('Failed to submit rating:', errorData);
+            console.log('Rating submitted successfully');
+
+            // Update local state with new rating
+            setUserRatings(prev => {
+                const newRatings = {
+                    ...prev,
+                    [bookId]: rating
+                };
+                console.log('Updated user ratings:', newRatings);
+                return newRatings;
+            });
+            setRatingStatus('success');
+
+            // Immediately load new recommendations after rating
+            console.log('Loading recommendations after rating update...');
+            try {
+                await loadRecommendations();
+                console.log('Current recommendations state:', recommendations);
+            } catch (recError) {
+                console.error('Error loading recommendations after rating:', recError);
+            }
+            
+        } catch (error) {
+            console.error('Error submitting rating:', error);
             setRatingStatus('error');
-            return;
+        } finally {
+            // Reset rating status after a delay
+            setTimeout(() => {
+                setRatingStatus('idle');
+                console.log('Rating status reset to idle');
+            }, 2000);
         }
+    };
 
-        // Update local state with new rating
-        setUserRatings(prev => ({
-            ...prev,
-            [bookId]: rating
-        }));
-        setRatingStatus('success');
-
-        // Immediately load new recommendations after rating
-        await loadRecommendations();
-        
-    } catch (error) {
-        console.error('Error submitting rating:', error);
-        setRatingStatus('error');
-    } finally {
-        // Reset rating status after a delay
-        setTimeout(() => {
-            setRatingStatus('idle');
-        }, 2000);
-    }
-};
     // Handle dismissing a book
     const handleDismissBook = async (bookId: string) => {
         try {
@@ -366,6 +402,11 @@ const handleRatingSubmit = async (bookId: string, rating: number) => {
         }
     };
 
+    // Handle reordering wishlist
+    const handleReorderWishlist = (items: WishlistItem[]) => {
+        setWishlistItems(items);
+    };
+
     return (
         <div className="min-h-screen bg-gray-900 text-white">
             {/* Header */}
@@ -412,30 +453,72 @@ const handleRatingSubmit = async (bookId: string, rating: number) => {
                 {/* Category Filter */}
                 <CategoryFilter
                     selectedCategories={selectedCategories}
-                    onCategoryChange={handleCategoryChange}
+                    onCategoriesChange={handleCategoryChange}
                 />
 
                 {/* Recommendations Section */}
-                {recommendations.length > 0 && (
-                    <section className="mb-12">
-                        <h2 className="text-2xl font-bold text-white mb-6">
-                            Recommended Books
-                        </h2>
+                <section className="mb-12">
+                    <h2 className="text-2xl font-bold text-white mb-6">
+                        Recommended Books
+                        {loadingRecommendations && (
+                            <span className="ml-2 text-gray-400 text-sm font-normal animate-pulse">
+                                Loading recommendations...
+                            </span>
+                        )}
+                    </h2>
+                    
+                    {error && (
+                        <div className="bg-red-900/50 text-red-200 p-4 rounded-lg mb-6">
+                            <div className="flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                                </svg>
+                                <span>{error}</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {!loadingRecommendations && !error && (!recommendations || recommendations.length === 0) && (
+                        <div className="text-center py-8 bg-gray-800/50 rounded-lg">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto text-gray-400 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                            </svg>
+                            <p className="text-gray-400 mb-4">Rate some books to get personalized recommendations!</p>
+                            <p className="text-sm text-gray-500">Your recommendations will appear here after you rate a few books.</p>
+                        </div>
+                    )}
+
+                    {loadingRecommendations && (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {filteredRecommendations.map((book) => (
-                                <BookCard
-                                    key={book.id}
-                                    book={book}
-                                    onRate={handleRatingSubmit}
-                                    onDismiss={handleDismissBook}
-                                    onAddToWishlist={handleAddToWishlist}
-                                    isInWishlist={wishlistBooks.has(book.id)}
-                                    userRating={userRatings[book.id]}
-                                />
+                            {[...Array(3)].map((_, i) => (
+                                <div key={i} className="bg-gray-800/50 rounded-lg p-6 animate-pulse">
+                                    <div className="h-4 bg-gray-700 rounded w-3/4 mb-4"></div>
+                                    <div className="h-4 bg-gray-700 rounded w-1/2 mb-8"></div>
+                                    <div className="h-4 bg-gray-700 rounded w-full mb-2"></div>
+                                    <div className="h-4 bg-gray-700 rounded w-5/6"></div>
+                                </div>
                             ))}
                         </div>
-                    </section>
-                )}
+                    )}
+
+                    {!loadingRecommendations && recommendations && recommendations.length > 0 && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            {filteredRecommendations.map((book) => (
+                                book && book.id && (
+                                    <BookCard
+                                        key={`rec-${book.id}`}
+                                        book={book}
+                                        onRate={handleRatingSubmit}
+                                        onDismiss={handleDismissBook}
+                                        onAddToWishlist={handleAddToWishlist}
+                                        isInWishlist={wishlistBooks.has(book.id)}
+                                        userRating={userRatings[book.id]}
+                                    />
+                                )
+                            ))}
+                        </div>
+                    )}
+                </section>
 
                 {/* All Books Section */}
                 <section>
@@ -463,6 +546,7 @@ const handleRatingSubmit = async (bookId: string, rating: number) => {
                     onClose={() => setIsWishlistOpen(false)}
                     wishlistItems={wishlistItems}
                     onRemoveFromWishlist={handleRemoveFromWishlist}
+                    onReorderWishlist={handleReorderWishlist}
                 />
             </main>
 

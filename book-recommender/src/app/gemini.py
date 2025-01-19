@@ -6,7 +6,7 @@ def get_gemini_recommendations(user_ratings: Dict[str, int], books_data: List[di
     """Get book recommendations using Gemini AI"""
     
     # Configure Gemini
-    genai.configure(api_key="AIzaSyAyThePUYfs0jVpeNynWlC164ZCZqDUa54")
+    genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
     model = genai.GenerativeModel("gemini-1.5-flash")
     
     # Create prompt based on user ratings

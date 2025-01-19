@@ -433,19 +433,63 @@ async def get_recommendations(data: dict):
         user_history = data.get("user_history", [])
         user_ratings = data.get("user_ratings", {})
         
+        # Get book details for the rated books
+        with get_db() as db:
+            placeholders = ','.join(['?' for _ in user_history])
+            if user_history:
+                query = f"""
+                    SELECT b.id, b.title, b.author, b.description, b.topics, b.publication_year, b.page_count,
+                           COALESCE(AVG(r.rating), 0) as average_rating
+                    FROM books b
+                    LEFT JOIN ratings r ON b.id = r.book_id
+                    WHERE b.id IN ({placeholders})
+                    GROUP BY b.id
+                """
+                cursor = db.execute(query, user_history)
+            else:
+                cursor = db.execute("""
+                    SELECT b.id, b.title, b.author, b.description, b.topics, b.publication_year, b.page_count,
+                           COALESCE(AVG(r.rating), 0) as average_rating
+                    FROM books b
+                    LEFT JOIN ratings r ON b.id = r.book_id
+                    GROUP BY b.id
+                    ORDER BY RANDOM()
+                    LIMIT 5
+                """)
+            
+            books = cursor.fetchall()
+            book_history = []
+            for book in books:
+                book_dict = dict(book)
+                # Parse topics from JSON string if needed
+                if isinstance(book_dict.get('topics'), str):
+                    try:
+                        book_dict['topics'] = json.loads(book_dict['topics'])
+                    except json.JSONDecodeError:
+                        book_dict['topics'] = []
+                elif book_dict.get('topics') is None:
+                    book_dict['topics'] = []
+                book_history.append(book_dict)
+        
         # Get recommendations using Gemini LLM
-        recommendations = get_personalized_recommendations(
-            user_history=user_history,
+        recommendations = await get_personalized_recommendations(
+            user_history=book_history,
             user_ratings=user_ratings,
             num_recommendations=5
         )
         
+        print("Generated recommendations:", recommendations)
+        
         return {
             "recommendations": recommendations,
-            "message": "Successfully generated recommendations using Gemini"
+            "message": "Successfully generated recommendations"
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Error in get_recommendations: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get recommendations: {str(e)}"
+        )
 
 @app.get("/wishlist")
 async def get_wishlist():

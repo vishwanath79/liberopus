@@ -21,7 +21,7 @@ app = FastAPI(title="Book Recommender API")
 async def startup_event():
     init_db()
 
-MODEL_NAME = 'llama3:13b'  # Using llama2 13B model
+
 
 def convert_db_book_to_model(book_row) -> Book:
     """Convert a database row to a Book model."""
