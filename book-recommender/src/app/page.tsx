@@ -173,7 +173,11 @@ export default function Home() {
             
             // Load recommendations after ratings are loaded
             if (Object.keys(ratings).length > 0) {
+                console.log('Found existing ratings, loading recommendations...');
                 await loadRecommendations();
+            } else {
+                console.log('No ratings found, loading default recommendations...');
+                await loadRecommendations(); // Load default recommendations even without ratings
             }
         } catch (error) {
             console.error('Failed to load user ratings:', error);
@@ -186,9 +190,9 @@ export default function Home() {
         const baseDelay = 5000;
         let attempt = 0;
 
+        setLoadingRecommendations(true);
         while (attempt < maxRetries) {
             try {
-                setLoadingRecommendations(true);
                 console.log(`Attempt ${attempt + 1} of ${maxRetries} to load recommendations`);
                 console.log('Current user ratings:', userRatings);
 
@@ -210,15 +214,21 @@ export default function Home() {
                 const data = await response.json();
                 console.log('Raw recommendations response:', data);
 
-                if (data.recommendations && Array.isArray(data.recommendations)) {
-                    // Ensure each recommendation has required fields
-                    const validRecommendations = data.recommendations.filter(book => 
-                        book && book.id && book.title && book.author
-                    );
+                if (data && data.recommendations && Array.isArray(data.recommendations)) {
+                    // Ensure each recommendation has required fields and is not null
+                    const validRecommendations = data.recommendations
+                        .filter(book => book !== null)
+                        .filter(book => book && book.id && book.title && book.author);
+                    
                     console.log('Setting valid recommendations:', validRecommendations);
-                    setRecommendations(validRecommendations);
-                    setError(null);
-                    return;
+                    if (validRecommendations.length > 0) {
+                        setRecommendations(validRecommendations);
+                        setError(null);
+                        setLoadingRecommendations(false);
+                        return;
+                    } else {
+                        throw new Error('No valid recommendations received');
+                    }
                 } else {
                     console.warn('Unexpected recommendations format:', data);
                     throw new Error('Invalid recommendations format');
@@ -231,13 +241,12 @@ export default function Home() {
                     console.error('All retry attempts failed');
                     setError('Failed to load recommendations. Please try again later.');
                     setRecommendations([]);
+                    setLoadingRecommendations(false);
                 } else {
                     const delay = baseDelay * Math.pow(2, attempt - 1);
                     console.log(`Waiting ${delay}ms before retry...`);
                     await new Promise(resolve => setTimeout(resolve, delay));
                 }
-            } finally {
-                setLoadingRecommendations(false);
             }
         }
     };
@@ -294,12 +303,7 @@ export default function Home() {
 
             // Immediately load new recommendations after rating
             console.log('Loading recommendations after rating update...');
-            try {
-                await loadRecommendations();
-                console.log('Current recommendations state:', recommendations);
-            } catch (recError) {
-                console.error('Error loading recommendations after rating:', recError);
-            }
+            await loadRecommendations();
             
         } catch (error) {
             console.error('Error submitting rating:', error);

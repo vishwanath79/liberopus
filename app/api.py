@@ -433,10 +433,22 @@ async def get_recommendations(data: dict):
         user_history = data.get("user_history", [])
         user_ratings = data.get("user_ratings", {})
         
+        print(f"Received request - User history: {user_history}, User ratings: {user_ratings}")
+        
         # Get book details for the rated books
         with get_db() as db:
-            placeholders = ','.join(['?' for _ in user_history])
+            # First ensure we have some books in the database
+            cursor = db.execute("SELECT COUNT(*) as count FROM books")
+            book_count = cursor.fetchone()['count']
+            
+            if book_count == 0:
+                raise HTTPException(
+                    status_code=500,
+                    detail="No books available in the database"
+                )
+            
             if user_history:
+                placeholders = ','.join(['?' for _ in user_history])
                 query = f"""
                     SELECT b.id, b.title, b.author, b.description, b.topics, b.publication_year, b.page_count,
                            COALESCE(AVG(r.rating), 0) as average_rating
@@ -447,6 +459,7 @@ async def get_recommendations(data: dict):
                 """
                 cursor = db.execute(query, user_history)
             else:
+                # If no user history, get random books for default recommendations
                 cursor = db.execute("""
                     SELECT b.id, b.title, b.author, b.description, b.topics, b.publication_year, b.page_count,
                            COALESCE(AVG(r.rating), 0) as average_rating
@@ -480,10 +493,37 @@ async def get_recommendations(data: dict):
         
         print("Generated recommendations:", recommendations)
         
+        if not recommendations:
+            # If no recommendations, return random books
+            with get_db() as db:
+                cursor = db.execute("""
+                    SELECT b.id, b.title, b.author, b.description, b.topics, b.publication_year, b.page_count,
+                           COALESCE(AVG(r.rating), 0) as average_rating
+                    FROM books b
+                    LEFT JOIN ratings r ON b.id = r.book_id
+                    GROUP BY b.id
+                    ORDER BY RANDOM()
+                    LIMIT 5
+                """)
+                default_books = cursor.fetchall()
+                recommendations = []
+                for book in default_books:
+                    book_dict = dict(book)
+                    if isinstance(book_dict.get('topics'), str):
+                        try:
+                            book_dict['topics'] = json.loads(book_dict['topics'])
+                        except json.JSONDecodeError:
+                            book_dict['topics'] = []
+                    elif book_dict.get('topics') is None:
+                        book_dict['topics'] = []
+                    recommendations.append(book_dict)
+        
+        # Return recommendations in the expected format
         return {
             "recommendations": recommendations,
             "message": "Successfully generated recommendations"
         }
+        
     except Exception as e:
         print(f"Error in get_recommendations: {str(e)}")
         raise HTTPException(

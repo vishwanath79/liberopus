@@ -7,6 +7,7 @@ import json
 import random
 import asyncio
 from tenacity import retry, stop_after_attempt, wait_exponential
+from database import get_db
 
 # Load environment variables
 load_dotenv()
@@ -183,30 +184,89 @@ async def get_personalized_recommendations(user_history: List[Dict], user_rating
         
         if not rated_books:
             print("No rated books found, using fallback recommendations")
-            return get_fallback_recommendations()
+            fallback_recs = get_fallback_recommendations()
+            # Format fallback recommendations to match frontend expectations
+            formatted_fallback = []
+            with get_db() as db:
+                for rec in fallback_recs:
+                    try:
+                        book_id = generate_book_id(rec['title'], rec['author'])
+                        cursor = db.execute("SELECT id FROM books WHERE id = ?", (book_id,))
+                        existing_book = cursor.fetchone()
+                        
+                        if not existing_book:
+                            db.execute("""
+                                INSERT INTO books (id, title, author, description, topics, technical_level)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                            """, (
+                                book_id,
+                                rec['title'],
+                                rec['author'],
+                                rec.get('explanation', ''),
+                                json.dumps(rec.get('topics', [])),
+                                rec.get('technical_level', 'Intermediate')
+                            ))
+                            db.commit()
+                        
+                        formatted_fallback.append({
+                            'id': book_id,
+                            'title': rec['title'],
+                            'author': rec['author'],
+                            'description': rec.get('explanation', ''),
+                            'topics': rec.get('topics', []),
+                            'average_rating': 0.0,
+                            'publication_year': None,
+                            'page_count': None
+                        })
+                    except Exception as e:
+                        print(f"Error formatting fallback recommendation {rec}: {str(e)}")
+                        continue
+            return formatted_fallback
         
         # Get LLM recommendations with retries
         llm_recommendations = await generate_gemini_recommendations(rated_books, num_recommendations)
         print(f"LLM recommendations received: {llm_recommendations}")  # Debug log
         
-        # Convert recommendations to match our Book model format
+        # Convert recommendations to match our Book model format and save to database
         formatted_recommendations = []
-        for rec in llm_recommendations:
-            try:
-                formatted_rec = {
-                    'id': generate_book_id(rec['title'], rec['author']),
-                    'title': rec['title'],
-                    'author': rec['author'],
-                    'description': rec.get('explanation', ''),
-                    'topics': rec.get('topics', []),
-                    'average_rating': 0.0,
-                    'publication_year': None,
-                    'page_count': None
-                }
-                formatted_recommendations.append(formatted_rec)
-            except Exception as e:
-                print(f"Error formatting recommendation {rec}: {str(e)}")
-                continue
+        with get_db() as db:
+            for rec in llm_recommendations:
+                try:
+                    book_id = generate_book_id(rec['title'], rec['author'])
+                    
+                    # Check if book already exists
+                    cursor = db.execute("SELECT id FROM books WHERE id = ?", (book_id,))
+                    existing_book = cursor.fetchone()
+                    
+                    if not existing_book:
+                        # Save new book to database
+                        db.execute("""
+                            INSERT INTO books (id, title, author, description, topics, technical_level)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (
+                            book_id,
+                            rec['title'],
+                            rec['author'],
+                            rec.get('explanation', ''),
+                            json.dumps(rec.get('topics', [])),
+                            rec.get('technical_level', 'Intermediate')
+                        ))
+                        db.commit()
+                    
+                    formatted_rec = {
+                        'id': book_id,
+                        'title': rec['title'],
+                        'author': rec['author'],
+                        'description': rec.get('explanation', ''),
+                        'topics': rec.get('topics', []),
+                        'average_rating': 0.0,
+                        'publication_year': None,
+                        'page_count': None
+                    }
+                    formatted_recommendations.append(formatted_rec)
+                except Exception as e:
+                    print(f"Error formatting and saving recommendation {rec}: {str(e)}")
+                    continue
         
         print(f"Final formatted recommendations: {formatted_recommendations}")  # Debug log
         return formatted_recommendations
@@ -215,4 +275,41 @@ async def get_personalized_recommendations(user_history: List[Dict], user_rating
         print(f"Error in get_personalized_recommendations: {str(e)}")
         print(f"User history: {user_history}")
         print(f"User ratings: {user_ratings}")
-        return get_fallback_recommendations() 
+        fallback_recs = get_fallback_recommendations()
+        # Format fallback recommendations to match frontend expectations
+        formatted_fallback = []
+        with get_db() as db:
+            for rec in fallback_recs:
+                try:
+                    book_id = generate_book_id(rec['title'], rec['author'])
+                    cursor = db.execute("SELECT id FROM books WHERE id = ?", (book_id,))
+                    existing_book = cursor.fetchone()
+                    
+                    if not existing_book:
+                        db.execute("""
+                            INSERT INTO books (id, title, author, description, topics, technical_level)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (
+                            book_id,
+                            rec['title'],
+                            rec['author'],
+                            rec.get('explanation', ''),
+                            json.dumps(rec.get('topics', [])),
+                            rec.get('technical_level', 'Intermediate')
+                        ))
+                        db.commit()
+                    
+                    formatted_fallback.append({
+                        'id': book_id,
+                        'title': rec['title'],
+                        'author': rec['author'],
+                        'description': rec.get('explanation', ''),
+                        'topics': rec.get('topics', []),
+                        'average_rating': 0.0,
+                        'publication_year': None,
+                        'page_count': None
+                    })
+                except Exception as e:
+                    print(f"Error formatting fallback recommendation {rec}: {str(e)}")
+                    continue
+        return formatted_fallback 
