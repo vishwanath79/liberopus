@@ -144,7 +144,6 @@ def import_goodreads_books():
                         print(f"Error processing line: {str(e)}")
                         continue
                 
-            cursor.commit()
             print(f"Successfully imported {books_added} books from Goodreads")
                 
     except Exception as e:
@@ -223,7 +222,6 @@ async def add_book(book_data: AddBookRequest):
                     book_data.page_count,
                     book_data.publication_year
                 ))
-            cursor.commit()
             
             # Get the inserted book
             book_id = cursor.lastrowid
@@ -333,7 +331,6 @@ async def dismiss_book(request: DismissBookRequest):
                 "INSERT INTO dismissed_books (book_id, timestamp) VALUES (?, ?)",
                 (request.book_id, datetime.now().isoformat())
             )
-            cursor.commit()
             return {"message": "Book dismissed successfully"}
     except Exception as e:
         print(f"Error dismissing book: {str(e)}")
@@ -386,8 +383,6 @@ async def rate_book(request: RatingRequest):
                     (request.book_id, request.rating)
                 )
             
-            cursor.commit()
-            
             # Calculate and update average rating for the book
             cursor.execute(
                 """
@@ -403,7 +398,6 @@ async def rate_book(request: RatingRequest):
                 "UPDATE books SET average_rating = ? WHERE id = ?",
                 (avg_rating or 0, request.book_id)
             )
-            cursor.commit()
             
             print(f"Successfully rated book {request.book_id} with rating {request.rating}")  # Debug log
             return {
@@ -432,7 +426,6 @@ async def get_recommendations(request: RecommendationRequest):
                 SET id = LOWER(HEX(RANDOMBLOB(8)))
                 WHERE id IS NULL OR id = ''
             """)
-            cursor.commit()
             
             if rated_books:
                 placeholders = ','.join(['?' for _ in rated_books])
@@ -488,7 +481,6 @@ async def get_recommendations(request: RecommendationRequest):
                         "UPDATE books SET id = ? WHERE title = ? AND author = ?",
                         (book_id, book_dict['title'], book_dict['author'])
                     )
-                    cursor.commit()
                     book_dict['id'] = book_id
 
                 # Parse topics from JSON string if needed
@@ -542,14 +534,12 @@ async def add_to_wishlist(book_id: str):
             "INSERT INTO wishlist (book_id, display_order) VALUES (?, ?)",
             (book_id, max_order + 1)
         )
-        cursor.commit()
         return {"message": "Added to wishlist"}
 
 @app.delete("/wishlist/remove/{book_id}")
 async def remove_from_wishlist(book_id: str):
     with get_db_cursor() as cursor:
         cursor.execute("DELETE FROM wishlist WHERE book_id = ?", (book_id,))
-        cursor.commit()
         return {"message": "Removed from wishlist"}
 
 @app.put("/wishlist/reorder")
@@ -562,7 +552,6 @@ async def reorder_wishlist(orders: List[dict[str, Union[str, int]]]):
                     "UPDATE wishlist SET display_order = ? WHERE book_id = ?",
                     (item["order"], item["book_id"])
                 )
-            cursor.commit()
             return {"message": "Wishlist reordered successfully"}
     except Exception as e:
         print(f"Error reordering wishlist: {str(e)}")

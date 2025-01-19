@@ -23,8 +23,8 @@ def get_db_cursor():
 
 def init_db():
     """Initialize the database."""
-    with get_db() as conn:
-        conn.execute("""
+    with get_db_cursor() as cursor:
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS books (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -36,18 +36,16 @@ def init_db():
                 page_count INTEGER
             )
         """)
-        conn.commit()
-    # Read schema
-    schema_path = Path('schema.sql')
-    if not schema_path.exists():
-        raise FileNotFoundError("schema.sql not found")
         
-    with open(schema_path) as f:
-        conn.executescript(f.read())
-    
-    conn.commit()
-    print("Database initialized successfully")
-    return conn
+        # Read schema
+        schema_path = Path('schema.sql')
+        if not schema_path.exists():
+            raise FileNotFoundError("schema.sql not found")
+            
+        with open(schema_path) as f:
+            cursor.executescript(f.read())
+        
+        print("Database initialized successfully")
 
 def get_db_connection():
     """Get a database connection for the current request."""
