@@ -255,17 +255,19 @@ async def add_rating(request: RatingRequest):
             )
             existing_rating = cursor.fetchone()
             
+            current_time = datetime.now().isoformat()
+            
             if existing_rating:
                 # Update existing rating
                 cursor.execute(
-                    "UPDATE ratings SET rating = ? WHERE book_id = ?",
-                    (request.rating, request.book_id)
+                    "UPDATE ratings SET rating = ?, timestamp = ? WHERE book_id = ?",
+                    (request.rating, current_time, request.book_id)
                 )
             else:
                 # Add new rating
                 cursor.execute(
-                    "INSERT INTO ratings (book_id, rating) VALUES (?, ?)",
-                    (request.book_id, request.rating)
+                    "INSERT INTO ratings (book_id, rating, timestamp) VALUES (?, ?, ?)",
+                    (request.book_id, request.rating, current_time)
                 )
             
             # Calculate and update average rating for the book
