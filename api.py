@@ -513,7 +513,22 @@ async def get_wishlist():
             ORDER BY w.display_order
         """)
         items = cursor.fetchall()
-        return {"wishlist": [dict(item) for item in items]}
+        
+        # Process items to ensure topics are parsed from JSON
+        processed_items = []
+        for item in items:
+            item_dict = dict(item)
+            # Parse topics from JSON string if needed
+            if isinstance(item_dict.get('topics'), str):
+                try:
+                    item_dict['topics'] = json.loads(item_dict['topics'])
+                except json.JSONDecodeError:
+                    item_dict['topics'] = []
+            elif item_dict.get('topics') is None:
+                item_dict['topics'] = []
+            processed_items.append(item_dict)
+            
+        return {"wishlist": processed_items}
 
 @app.post("/wishlist/add")
 async def add_to_wishlist(request: WishlistRequest):
