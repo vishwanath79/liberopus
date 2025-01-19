@@ -5,6 +5,7 @@ export interface Book {
     description: string;
     average_rating: number;
     topics: string[];
+    technical_level: string;
     publication_year?: number;
     page_count?: number;
 }

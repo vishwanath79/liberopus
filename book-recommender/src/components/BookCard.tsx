@@ -43,9 +43,11 @@ export const BookCard: React.FC<BookCardProps> = ({ book, onRatingSubmit, curren
                 
                 {/* Technical Level Badge */}
                 <div className="mb-4">
-                    <span className="bg-indigo-900/50 text-indigo-200 px-3 py-1 rounded-full text-sm">
-                        {book.technical_level}
-                    </span>
+                    {book.technical_level && (
+                        <span className="bg-indigo-900/50 text-indigo-200 px-3 py-1 rounded-full text-sm">
+                            {book.technical_level}
+                        </span>
+                    )}
                 </div>
                 
                 {/* Rating */}

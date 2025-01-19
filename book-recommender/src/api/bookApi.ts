@@ -4,6 +4,10 @@ import { Book, RecommendationRequest, Rating } from '../types/types';
 // API configuration with environment variable support
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+interface RatingsResponse {
+    ratings: Rating[];
+}
+
 // Helper function to handle API responses
 const handleResponse = async (response: Response) => {
     if (!response.ok) {
@@ -13,36 +17,29 @@ const handleResponse = async (response: Response) => {
     return response.json();
 };
 
-interface BookRequest {
-    title: string;
-    author: string;
-    categories: string[];
-    technical_level: string;
-    topics: string[];
-    description: string;
-    avg_rating: number;
-    page_count: number;
-    publication_year: number;
-}
-
 export const bookApi = {
-    // Analyze a book's content
-    analyzeBook: async (bookData: BookRequest) => {
+    // Get all books
+    getBooks: async (): Promise<Book[]> => {
         try {
-            const response = await fetch('http://localhost:8000/add-book', {
+            const response = await fetch(`${API_BASE_URL}/books`);
+            return handleResponse(response);
+        } catch (error) {
+            console.error('Error fetching books:', error);
+            throw error;
+        }
+    },
+
+    // Analyze a book's content
+    analyzeBook: async (bookData: Partial<Book>) => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/add-book`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(bookData)
             });
-            
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Failed to add book');
-            }
-            
-            return await response.json();
+            return handleResponse(response);
         } catch (error) {
             console.error('Error in analyzeBook:', error);
             throw error;
@@ -58,22 +55,16 @@ export const bookApi = {
     },
 
     // Get personalized recommendations
-    getRecommendations: async (data: { user_history: string[], user_ratings: { [key: string]: number } }) => {
+    getRecommendations: async (data: RecommendationRequest) => {
         try {
-            const response = await fetch('http://localhost:8000/get-recommendations', {
+            const response = await fetch(`${API_BASE_URL}/get-recommendations`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(data)
             });
-            
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Failed to get recommendations');
-            }
-            
-            return await response.json();
+            return handleResponse(response);
         } catch (error) {
             console.error('Error in getRecommendations:', error);
             throw error;
@@ -83,40 +74,92 @@ export const bookApi = {
     // Submit a book rating
     submitRating: async (bookId: string, rating: number) => {
         try {
-            const response = await fetch('http://localhost:8000/submit-rating', {
+            const response = await fetch(`${API_BASE_URL}/ratings`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
                     book_id: bookId,
-                    rating: rating,
-                    timestamp: new Date().toISOString()
+                    rating: rating
                 })
             });
-            
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Failed to submit rating');
-            }
-            
-            return await response.json();
+            return handleResponse(response);
         } catch (error) {
             console.error('Error in submitRating:', error);
             throw error;
         }
     },
-};
 
-export const fetchBooks = async (): Promise<Book[]> => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/books`);
-        if (!response.ok) {
-            throw new Error('Failed to fetch books');
+    // Get user ratings
+    getRatings: async (): Promise<RatingsResponse> => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/ratings`);
+            return handleResponse(response);
+        } catch (error) {
+            console.error('Error fetching ratings:', error);
+            throw error;
         }
-        return response.json();
-    } catch (error) {
-        console.error('Error fetching books:', error);
-        throw error;
+    },
+
+    // Get wishlist
+    getWishlist: async () => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/wishlist`);
+            return handleResponse(response);
+        } catch (error) {
+            console.error('Error fetching wishlist:', error);
+            throw error;
+        }
+    },
+
+    // Add to wishlist
+    addToWishlist: async (bookId: string) => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/wishlist/add`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ book_id: bookId })
+            });
+            return handleResponse(response);
+        } catch (error) {
+            console.error('Error adding to wishlist:', error);
+            throw error;
+        }
+    },
+
+    // Remove from wishlist
+    removeFromWishlist: async (bookId: string) => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/wishlist/remove/${bookId}`, {
+                method: 'DELETE'
+            });
+            return handleResponse(response);
+        } catch (error) {
+            console.error('Error removing from wishlist:', error);
+            throw error;
+        }
+    },
+
+    // Dismiss book
+    dismissBook: async (bookId: string) => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/dismiss-book`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ book_id: bookId })
+            });
+            return handleResponse(response);
+        } catch (error) {
+            console.error('Error dismissing book:', error);
+            throw error;
+        }
     }
 };
+
+// Export the getBooks function directly for backward compatibility
+export const fetchBooks = bookApi.getBooks;

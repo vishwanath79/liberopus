@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { Book, WishlistItem } from '../types/types';
+import { bookApi } from '../api/bookApi';
 import { Footer } from '../components/Footer';
 import { CategoryFilter } from '../components/CategoryFilter';
 import { WishlistDrawer } from '../components/WishlistDrawer';
@@ -89,7 +90,6 @@ const BookCard = ({ book, onRate, onDismiss, onAddToWishlist, isInWishlist, user
 export default function Home() {
     const [books, setBooks] = useState<Book[]>([]);
     const [recommendations, setRecommendations] = useState<Book[]>([]);
-    const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [userRatings, setUserRatings] = useState<{[key: string]: number}>({});
     const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
@@ -98,10 +98,7 @@ export default function Home() {
     const [wishlistCount, setWishlistCount] = useState<number>(0);
     const [isWishlistOpen, setIsWishlistOpen] = useState(false);
     const [wishlistItems, setWishlistItems] = useState<WishlistItem[]>([]);
-    const [ratingStatus, setRatingStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
     const [loadingRecommendations, setLoadingRecommendations] = useState(false);
-    const [showAddBookForm, setShowAddBookForm] = useState(false);
-    const [addBookStatus, setAddBookStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
 
     // Filter books based on selected categories
     const filteredBooks = useMemo(() => {
@@ -132,247 +129,122 @@ export default function Home() {
     // Initialize data loading
     useEffect(() => {
         const initializeData = async () => {
-            await Promise.all([
-                loadBooks(),
-                loadUserRatings(),
-                loadWishlist()
-            ]);
+            try {
+                const [booksData, ratingsData, wishlistData] = await Promise.all([
+                    bookApi.getBooks(),
+                    bookApi.getRatings(),
+                    bookApi.getWishlist()
+                ]);
+
+                setBooks(booksData);
+                
+                // Process ratings
+                const ratingsMap = ratingsData.ratings.reduce((acc: {[key: string]: number}, rating) => {
+                    acc[rating.book_id] = rating.rating;
+                    return acc;
+                }, {});
+                setUserRatings(ratingsMap);
+
+                // Process wishlist
+                setWishlistItems(wishlistData.wishlist);
+                setWishlistCount(wishlistData.wishlist.length);
+                setWishlistBooks(new Set(wishlistData.wishlist.map((item: WishlistItem) => item.id)));
+
+                // Load recommendations if we have ratings
+                if (Object.keys(ratingsMap).length > 0) {
+                    await loadRecommendations();
+                }
+            } catch (error) {
+                console.error('Error initializing data:', error);
+                setError('Failed to load initial data. Please try again later.');
+            }
         };
+
         initializeData();
     }, []);
 
-    // Load books from API
-    const loadBooks = async () => {
-        try {
-            const response = await fetch('http://localhost:8000/books');
-            const data = await response.json();
-            setBooks(Array.isArray(data) ? data : []);
-            setError(null);
-        } catch (error) {
-            console.error('Failed to load books:', error);
-            setError('Failed to load books. Please try again later.');
-            setBooks([]);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    // Load user ratings from API
-    const loadUserRatings = async () => {
-        try {
-            const response = await fetch('http://localhost:8000/ratings');
-            if (!response.ok) {
-                throw new Error('Failed to load user ratings');
-            }
-            const data = await response.json();
-            const ratings = data.ratings.reduce((acc: {[key: string]: number}, rating: { book_id: string; rating: number }) => {
-                acc[rating.book_id] = rating.rating;
-                return acc;
-            }, {});
-            setUserRatings(ratings);
-            
-            // Load recommendations after ratings are loaded
-            if (Object.keys(ratings).length > 0) {
-                console.log('Found existing ratings, loading recommendations...');
-                await loadRecommendations();
-            } else {
-                console.log('No ratings found, loading default recommendations...');
-                await loadRecommendations(); // Load default recommendations even without ratings
-            }
-        } catch (error) {
-            console.error('Failed to load user ratings:', error);
-        }
-    };
-
-    // Load recommendations from API with retries
+    // Load recommendations from API
     const loadRecommendations = async () => {
-        const maxRetries = 5;
-        const baseDelay = 5000;
-        let attempt = 0;
-
         setLoadingRecommendations(true);
-        while (attempt < maxRetries) {
-            try {
-                console.log(`Attempt ${attempt + 1} of ${maxRetries} to load recommendations`);
-                console.log('Current user ratings:', userRatings);
-
-                const response = await fetch('http://localhost:8000/get-recommendations', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        user_history: Object.keys(userRatings),
-                        user_ratings: userRatings
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Failed to load recommendations: ${response.status}`);
-                }
-
-                const data = await response.json();
-                console.log('Raw recommendations response:', data);
-
-                if (data && data.recommendations && Array.isArray(data.recommendations)) {
-                    // Ensure each recommendation has required fields and is not null
-                    const validRecommendations = data.recommendations
-                        .filter(book => book !== null)
-                        .filter(book => book && book.id && book.title && book.author);
-                    
-                    console.log('Setting valid recommendations:', validRecommendations);
-                    if (validRecommendations.length > 0) {
-                        setRecommendations(validRecommendations);
-                        setError(null);
-                        setLoadingRecommendations(false);
-                        return;
-                    } else {
-                        throw new Error('No valid recommendations received');
-                    }
-                } else {
-                    console.warn('Unexpected recommendations format:', data);
-                    throw new Error('Invalid recommendations format');
-                }
-            } catch (error) {
-                console.error(`Attempt ${attempt + 1} failed:`, error);
-                attempt++;
-                
-                if (attempt === maxRetries) {
-                    console.error('All retry attempts failed');
-                    setError('Failed to load recommendations. Please try again later.');
-                    setRecommendations([]);
-                    setLoadingRecommendations(false);
-                } else {
-                    const delay = baseDelay * Math.pow(2, attempt - 1);
-                    console.log(`Waiting ${delay}ms before retry...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                }
-            }
-        }
-    };
-
-    // Load wishlist from API
-    const loadWishlist = async () => {
         try {
-            const response = await fetch('http://localhost:8000/wishlist');
-            if (!response.ok) {
-                throw new Error('Failed to load wishlist');
+            const data = await bookApi.getRecommendations({
+                user_history: Object.keys(userRatings),
+                user_ratings: userRatings
+            });
+
+            if (data.recommendations) {
+                const validRecommendations = data.recommendations
+                    .filter((book: Book | null): book is Book => 
+                        book !== null && 
+                        typeof book === 'object' &&
+                        'id' in book &&
+                        'title' in book &&
+                        'author' in book
+                    );
+
+                setRecommendations(validRecommendations);
+                setError(null);
             }
-            const data = await response.json();
-            setWishlistItems(data.wishlist);
-            setWishlistCount(data.wishlist.length);
-            const wishlistBookIds = new Set(data.wishlist.map((item: WishlistItem) => item.id));
-            setWishlistBooks(wishlistBookIds);
         } catch (error) {
-            console.error('Failed to load wishlist:', error);
+            console.error('Failed to load recommendations:', error);
+            setError('Failed to load recommendations. Please try again later.');
+            setRecommendations([]);
+        } finally {
+            setLoadingRecommendations(false);
         }
     };
 
     // Handle rating submission
     const handleRatingSubmit = async (bookId: string, rating: number) => {
-        console.log('Starting rating submission:', { bookId, rating });
-        setRatingStatus('submitting');
         try {
-            const response = await fetch('http://localhost:8000/ratings', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ book_id: bookId, rating }),
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                console.error('Failed to submit rating:', errorData);
-                setRatingStatus('error');
-                return;
-            }
-
-            console.log('Rating submitted successfully');
-
-            // Update local state with new rating
-            setUserRatings(prev => {
-                const newRatings = {
-                    ...prev,
-                    [bookId]: rating
-                };
-                console.log('Updated user ratings:', newRatings);
-                return newRatings;
-            });
-            setRatingStatus('success');
-
-            // Immediately load new recommendations after rating
-            console.log('Loading recommendations after rating update...');
+            await bookApi.submitRating(bookId, rating);
+            setUserRatings(prev => ({
+                ...prev,
+                [bookId]: rating
+            }));
             await loadRecommendations();
-            
         } catch (error) {
             console.error('Error submitting rating:', error);
-            setRatingStatus('error');
-        } finally {
-            // Reset rating status after a delay
-            setTimeout(() => {
-                setRatingStatus('idle');
-                console.log('Rating status reset to idle');
-            }, 2000);
+            setError('Failed to submit rating. Please try again.');
         }
     };
 
     // Handle dismissing a book
     const handleDismissBook = async (bookId: string) => {
         try {
-            const response = await fetch('http://localhost:8000/dismiss-book', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ book_id: bookId }),
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to dismiss book');
-            }
-
+            await bookApi.dismissBook(bookId);
             setDismissedBooks(prev => new Set([...prev, bookId]));
         } catch (error) {
-            console.error('Failed to dismiss book:', error);
+            console.error('Error dismissing book:', error);
+            setError('Failed to dismiss book. Please try again.');
         }
     };
 
-    // Handle adding a book to wishlist
+    // Handle adding to wishlist
     const handleAddToWishlist = async (bookId: string) => {
         try {
-            const response = await fetch('http://localhost:8000/wishlist/add', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ book_id: bookId }),
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to add book to wishlist');
-            }
-
-            await loadWishlist(); // Reload wishlist to get updated data
+            await bookApi.addToWishlist(bookId);
+            const wishlistData = await bookApi.getWishlist();
+            setWishlistItems(wishlistData.wishlist);
+            setWishlistCount(wishlistData.wishlist.length);
+            setWishlistBooks(new Set(wishlistData.wishlist.map((item: WishlistItem) => item.id)));
         } catch (error) {
-            console.error('Failed to add book to wishlist:', error);
+            console.error('Error adding to wishlist:', error);
+            setError('Failed to add to wishlist. Please try again.');
         }
     };
 
-    // Handle removing a book from wishlist
+    // Handle removing from wishlist
     const handleRemoveFromWishlist = async (bookId: string) => {
         try {
-            const response = await fetch(`http://localhost:8000/wishlist/remove/${bookId}`, {
-                method: 'DELETE',
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to remove book from wishlist');
-            }
-
-            await loadWishlist(); // Reload wishlist to get updated data
+            await bookApi.removeFromWishlist(bookId);
+            const wishlistData = await bookApi.getWishlist();
+            setWishlistItems(wishlistData.wishlist);
+            setWishlistCount(wishlistData.wishlist.length);
+            setWishlistBooks(new Set(wishlistData.wishlist.map((item: WishlistItem) => item.id)));
         } catch (error) {
-            console.error('Failed to remove book from wishlist:', error);
+            console.error('Error removing from wishlist:', error);
+            setError('Failed to remove from wishlist. Please try again.');
         }
     };
 
@@ -381,34 +253,20 @@ export default function Home() {
         setSelectedCategories(categories);
     };
 
-    // Handle adding a new book
-    const handleAddBook = async (title: string, author: string) => {
-        setAddBookStatus('submitting');
-        try {
-            const response = await fetch('http://localhost:8000/add-book', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ title, author }),
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to add book');
-            }
-
-            setAddBookStatus('success');
-            setShowAddBookForm(false);
-            await loadBooks(); // Reload books to include the new addition
-        } catch (error) {
-            console.error('Failed to add book:', error);
-            setAddBookStatus('error');
-        }
-    };
-
     // Handle reordering wishlist
-    const handleReorderWishlist = (items: WishlistItem[]) => {
-        setWishlistItems(items);
+    const handleReorderWishlist = async (orders: { book_id: string; order: number }[]) => {
+        try {
+            // Update the order in the UI immediately
+            const updatedItems = [...wishlistItems].sort((a, b) => {
+                const orderA = orders.find(o => o.book_id === a.id)?.order ?? 0;
+                const orderB = orders.find(o => o.book_id === b.id)?.order ?? 0;
+                return orderA - orderB;
+            });
+            setWishlistItems(updatedItems);
+        } catch (error) {
+            console.error('Error reordering wishlist:', error);
+            setError('Failed to reorder wishlist. Please try again.');
+        }
     };
 
     return (

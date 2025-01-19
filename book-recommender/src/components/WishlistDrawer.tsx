@@ -13,8 +13,7 @@ export const WishlistDrawer = ({
     isOpen,
     onClose,
     wishlistItems,
-    onRemoveFromWishlist,
-    onReorderWishlist
+    onRemoveFromWishlist
 }: WishlistDrawerProps) => {
     const [sortBy, setSortBy] = useState<'date' | 'title' | 'technical'>('date');
     const [filterTopic, setFilterTopic] = useState<string>('');
@@ -171,7 +170,7 @@ export const WishlistDrawer = ({
                 <div className="overflow-y-auto h-[calc(100vh-120px)] p-4">
                     {sortedItems.length > 0 ? (
                         <div className="space-y-4">
-                            {sortedItems.map((item, index) => (
+                            {sortedItems.map((item) => (
                                 <div
                                     key={item.id}
                                     className="bg-slate-800/50 rounded p-4 border border-slate-700/50 hover:border-indigo-500/50 transition-colors"
