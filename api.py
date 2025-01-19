@@ -234,13 +234,67 @@ async def add_book(book_data: AddBookRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/ratings")
-async def add_rating(book_id: str, rating: int):
-    with get_db_cursor() as cursor:
-        cursor.execute(
-            "INSERT OR REPLACE INTO ratings (book_id, rating) VALUES (?, ?)",
-            (book_id, rating)
-        )
-        return {"message": "Rating added successfully"}
+async def add_rating(request: RatingRequest):
+    """Rate a book."""
+    try:
+        print(f"Processing rating request: {request}")  # Debug log
+        with get_db_cursor() as cursor:
+            # Check if book exists
+            cursor.execute("SELECT id FROM books WHERE id = ?", (request.book_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Book not found")
+            
+            # Check if rating is valid (1-5)
+            if not 1 <= request.rating <= 5:
+                raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+            
+            # Check if rating already exists
+            cursor.execute(
+                "SELECT id FROM ratings WHERE book_id = ?",
+                (request.book_id,)
+            )
+            existing_rating = cursor.fetchone()
+            
+            if existing_rating:
+                # Update existing rating
+                cursor.execute(
+                    "UPDATE ratings SET rating = ? WHERE book_id = ?",
+                    (request.rating, request.book_id)
+                )
+            else:
+                # Add new rating
+                cursor.execute(
+                    "INSERT INTO ratings (book_id, rating) VALUES (?, ?)",
+                    (request.book_id, request.rating)
+                )
+            
+            # Calculate and update average rating for the book
+            cursor.execute(
+                """
+                SELECT AVG(rating) as avg_rating
+                FROM ratings
+                WHERE book_id = ?
+                """,
+                (request.book_id,)
+            )
+            avg_rating = cursor.fetchone()["avg_rating"]
+            
+            cursor.execute(
+                "UPDATE books SET average_rating = ? WHERE id = ?",
+                (avg_rating or 0, request.book_id)
+            )
+            
+            print(f"Successfully rated book {request.book_id} with rating {request.rating}")  # Debug log
+            return {
+                "message": "Rating submitted successfully",
+                "book_id": request.book_id,
+                "rating": request.rating,
+                "average_rating": avg_rating or 0
+            }
+            
+    except Exception as e:
+        print(f"Error rating book: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/ratings")
 async def get_ratings():
@@ -348,69 +402,6 @@ async def get_dismissed_books():
         print(f"Error getting dismissed books: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/rate-book")
-async def rate_book(request: RatingRequest):
-    """Rate a book."""
-    try:
-        print(f"Processing rating request: {request}")  # Debug log
-        with get_db_cursor() as cursor:
-            # Check if book exists
-            cursor.execute("SELECT id FROM books WHERE id = ?", (request.book_id,))
-            if not cursor.fetchone():
-                raise HTTPException(status_code=404, detail="Book not found")
-            
-            # Check if rating is valid (1-5)
-            if not 1 <= request.rating <= 5:
-                raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
-            
-            # Check if rating already exists
-            cursor.execute(
-                "SELECT id FROM ratings WHERE book_id = ?",
-                (request.book_id,)
-            )
-            existing_rating = cursor.fetchone()
-            
-            if existing_rating:
-                # Update existing rating
-                cursor.execute(
-                    "UPDATE ratings SET rating = ? WHERE book_id = ?",
-                    (request.rating, request.book_id)
-                )
-            else:
-                # Add new rating
-                cursor.execute(
-                    "INSERT INTO ratings (book_id, rating) VALUES (?, ?)",
-                    (request.book_id, request.rating)
-                )
-            
-            # Calculate and update average rating for the book
-            cursor.execute(
-                """
-                SELECT AVG(rating) as avg_rating
-                FROM ratings
-                WHERE book_id = ?
-                """,
-                (request.book_id,)
-            )
-            avg_rating = cursor.fetchone()["avg_rating"]
-            
-            cursor.execute(
-                "UPDATE books SET average_rating = ? WHERE id = ?",
-                (avg_rating or 0, request.book_id)
-            )
-            
-            print(f"Successfully rated book {request.book_id} with rating {request.rating}")  # Debug log
-            return {
-                "message": "Rating submitted successfully",
-                "book_id": request.book_id,
-                "rating": request.rating,
-                "average_rating": avg_rating or 0
-            }
-            
-    except Exception as e:
-        print(f"Error rating book: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-    
 @app.post("/get-recommendations")
 async def get_recommendations(request: RecommendationRequest):
     """Get personalized book recommendations."""
