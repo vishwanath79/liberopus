@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Union
 from datetime import datetime
-from database import get_db, init_db
+from database import get_db_cursor, init_db
 from models import Book, Rating
 from fastapi.middleware.cors import CORSMiddleware
 import csv
@@ -45,11 +45,10 @@ def import_goodreads_books():
         
         print(f"Starting Goodreads import from {csv_path.absolute()}")
         
-        with get_db() as db:
+        with get_db_cursor() as cursor:
             # Clear existing books
-            db.execute("DELETE FROM books")
-            db.execute("DELETE FROM ratings")
-            db.commit()
+            cursor.execute("DELETE FROM books")
+            cursor.execute("DELETE FROM ratings")
             
             # Read CSV file
             with open(csv_path, 'r', encoding='utf-8') as file:
@@ -131,7 +130,7 @@ def import_goodreads_books():
                         }
                         
                         # Insert book into database
-                        cursor = db.execute("""
+                        cursor.execute("""
                             INSERT OR REPLACE INTO books 
                             (id, title, author, description, average_rating, topics, publication_year, page_count)
                             VALUES (:id, :title, :author, :description, :average_rating, :topics, :publication_year, :page_count)
@@ -145,8 +144,8 @@ def import_goodreads_books():
                         print(f"Error processing line: {str(e)}")
                         continue
                 
-                db.commit()
-                print(f"Successfully imported {books_added} books from Goodreads")
+            cursor.commit()
+            print(f"Successfully imported {books_added} books from Goodreads")
                 
     except Exception as e:
         print(f"Error importing books from Goodreads: {str(e)}")
@@ -192,38 +191,10 @@ async def root():
 
 @app.get("/books")
 async def get_books():
-    """Get all books from the database."""
-    try:
-        with get_db() as db:
-            cursor = db.execute("""
-                SELECT b.*, 
-                       COUNT(r.id) as rating_count
-                FROM books b
-                LEFT JOIN ratings r ON b.id = r.book_id
-                GROUP BY b.id
-                ORDER BY b.title
-            """)
-            books = cursor.fetchall()
-            print(f"Found {len(books)} books in database")  # Debug log
-            
-            book_list = []
-            for book in books:
-                try:
-                    print(f"Processing book: id={book['id']}, title={book['title']}")  # Debug log
-                    book_model = convert_db_book_to_model(book)
-                    book_list.append(book_model)
-                except Exception as book_error:
-                    print(f"Error converting book {book['id']}: {str(book_error)}")
-                    continue
-            
-            return book_list
-            
-    except Exception as e:
-        print(f"Error in get_books: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to load books: {str(e)}"
-        )
+    with get_db_cursor() as cursor:
+        cursor.execute("SELECT * FROM books")
+        books = cursor.fetchall()
+        return [dict(book) for book in books]
 
 class AddBookRequest(BaseModel):
     """Request model for adding a book"""
@@ -238,8 +209,8 @@ class AddBookRequest(BaseModel):
 async def add_book(book_data: AddBookRequest):
     """Add a new book to the database."""
     try:
-        with get_db() as db:
-            cursor = db.execute("""
+        with get_db_cursor() as cursor:
+            cursor.execute("""
                 INSERT INTO books (
                     title, author, description, technical_level, 
                     page_count, publication_year
@@ -252,11 +223,11 @@ async def add_book(book_data: AddBookRequest):
                     book_data.page_count,
                     book_data.publication_year
                 ))
-            db.commit()
+            cursor.commit()
             
             # Get the inserted book
             book_id = cursor.lastrowid
-            cursor = db.execute("SELECT * FROM books WHERE id = ?", (book_id,))
+            cursor.execute("SELECT * FROM books WHERE id = ?", (book_id,))
             book = cursor.fetchone()
             
             return {"message": "Book added successfully", "book": convert_db_book_to_model(book)}
@@ -264,67 +235,21 @@ async def add_book(book_data: AddBookRequest):
         print(f"Error adding book: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-
 @app.post("/ratings")
-async def submit_rating(request: RatingRequest):
-    """Submit a rating for a book."""
-    try:
-        print(f"Received rating request: book_id={request.book_id}, rating={request.rating}")  # Debug log
-        with get_db() as db:
-            # Check if book exists
-            cursor = db.execute("SELECT id, title FROM books WHERE id = ?", (request.book_id,))
-            book = cursor.fetchone()
-            if not book:
-                print(f"Book not found with ID: {request.book_id}")  # Debug log
-                # List some valid book IDs for comparison
-                cursor = db.execute("SELECT id, title FROM books LIMIT 5")
-                sample_books = cursor.fetchall()
-                print("Sample valid book IDs:")
-                for b in sample_books:
-                    print(f"  {b['id']} - {b['title']}")
-                raise HTTPException(status_code=404, detail="Book not found")
-            
-            print(f"Found book: id={book['id']}, title={book['title']}")  # Debug log
-            
-            # Check if rating is valid (1-5)
-            if not 1 <= request.rating <= 5:
-                raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
-            
-            # Add or update rating
-            db.execute("""
-                INSERT OR REPLACE INTO ratings (book_id, rating, timestamp)
-                VALUES (?, ?, ?)
-            """, (request.book_id, request.rating, datetime.now().isoformat()))
-            
-            db.commit()
-            print(f"Successfully submitted rating for book: {book['title']}")  # Debug log
-            return {"message": "Rating submitted successfully"}
-    except Exception as e:
-        print(f"Error submitting rating: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+async def add_rating(book_id: str, rating: int):
+    with get_db_cursor() as cursor:
+        cursor.execute(
+            "INSERT OR REPLACE INTO ratings (book_id, rating) VALUES (?, ?)",
+            (book_id, rating)
+        )
+        return {"message": "Rating added successfully"}
 
 @app.get("/ratings")
 async def get_ratings():
-    """Get all ratings from the database."""
-    try:
-        with get_db() as db:
-            cursor = db.execute("SELECT * FROM ratings")
-            ratings = cursor.fetchall()
-            return {
-                "ratings": [
-                    {
-                        "id": rating["id"],
-                        "book_id": str(rating["book_id"]),
-                        "rating": rating["rating"],
-                        "timestamp": rating["timestamp"]
-                    }
-                    for rating in ratings
-                ]
-            }
-    except Exception as e:
-        print(f"Error getting ratings: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    with get_db_cursor() as cursor:
+        cursor.execute("SELECT * FROM ratings")
+        ratings = cursor.fetchall()
+        return {"ratings": [dict(rating) for rating in ratings]}
 
 @app.post("/import-goodreads")
 async def import_goodreads():
@@ -397,18 +322,18 @@ class WishlistRequest(BaseModel):
 async def dismiss_book(request: DismissBookRequest):
     """Add a book to the dismissed list."""
     try:
-        with get_db() as db:
+        with get_db_cursor() as cursor:
             # Check if book exists
-            cursor = db.execute("SELECT id FROM books WHERE id = ?", (request.book_id,))
+            cursor.execute("SELECT id FROM books WHERE id = ?", (request.book_id,))
             if not cursor.fetchone():
                 raise HTTPException(status_code=404, detail="Book not found")
             
             # Add to dismissed books
-            db.execute(
+            cursor.execute(
                 "INSERT INTO dismissed_books (book_id, timestamp) VALUES (?, ?)",
                 (request.book_id, datetime.now().isoformat())
             )
-            db.commit()
+            cursor.commit()
             return {"message": "Book dismissed successfully"}
     except Exception as e:
         print(f"Error dismissing book: {str(e)}")
@@ -418,24 +343,22 @@ async def dismiss_book(request: DismissBookRequest):
 async def get_dismissed_books():
     """Get list of dismissed book IDs."""
     try:
-        with get_db() as db:
-            cursor = db.execute("SELECT book_id FROM dismissed_books")
+        with get_db_cursor() as cursor:
+            cursor.execute("SELECT book_id FROM dismissed_books")
             dismissed = cursor.fetchall()
             return {"dismissed_books": [row["book_id"] for row in dismissed]}
     except Exception as e:
         print(f"Error getting dismissed books: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-
 @app.post("/rate-book")
 async def rate_book(request: RatingRequest):
     """Rate a book."""
     try:
         print(f"Processing rating request: {request}")  # Debug log
-        with get_db() as db:
+        with get_db_cursor() as cursor:
             # Check if book exists
-            cursor = db.execute("SELECT id FROM books WHERE id = ?", (request.book_id,))
+            cursor.execute("SELECT id FROM books WHERE id = ?", (request.book_id,))
             if not cursor.fetchone():
                 raise HTTPException(status_code=404, detail="Book not found")
             
@@ -444,7 +367,7 @@ async def rate_book(request: RatingRequest):
                 raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
             
             # Check if rating already exists
-            cursor = db.execute(
+            cursor.execute(
                 "SELECT id FROM ratings WHERE book_id = ?",
                 (request.book_id,)
             )
@@ -452,21 +375,21 @@ async def rate_book(request: RatingRequest):
             
             if existing_rating:
                 # Update existing rating
-                db.execute(
-                    "UPDATE ratings SET rating = ?, timestamp = ? WHERE book_id = ?",
-                    (request.rating, datetime.now().isoformat(), request.book_id)
+                cursor.execute(
+                    "UPDATE ratings SET rating = ? WHERE book_id = ?",
+                    (request.rating, request.book_id)
                 )
             else:
                 # Add new rating
-                db.execute(
-                    "INSERT INTO ratings (book_id, rating, timestamp) VALUES (?, ?, ?)",
-                    (request.book_id, request.rating, datetime.now().isoformat())
+                cursor.execute(
+                    "INSERT INTO ratings (book_id, rating) VALUES (?, ?)",
+                    (request.book_id, request.rating)
                 )
             
-            db.commit()
+            cursor.commit()
             
             # Calculate and update average rating for the book
-            cursor = db.execute(
+            cursor.execute(
                 """
                 SELECT AVG(rating) as avg_rating
                 FROM ratings
@@ -476,11 +399,11 @@ async def rate_book(request: RatingRequest):
             )
             avg_rating = cursor.fetchone()["avg_rating"]
             
-            db.execute(
+            cursor.execute(
                 "UPDATE books SET average_rating = ? WHERE id = ?",
                 (avg_rating or 0, request.book_id)
             )
-            db.commit()
+            cursor.commit()
             
             print(f"Successfully rated book {request.book_id} with rating {request.rating}")  # Debug log
             return {
@@ -500,16 +423,16 @@ async def get_recommendations(request: RecommendationRequest):
     try:
         print("Processing recommendation request:", request)
         
-        with get_db() as db:
+        with get_db_cursor() as cursor:
             rated_books = list(request.user_ratings.keys())
             
             # First, ensure all books have IDs
-            db.execute("""
+            cursor.execute("""
                 UPDATE books 
                 SET id = LOWER(HEX(RANDOMBLOB(8)))
                 WHERE id IS NULL OR id = ''
             """)
-            db.commit()
+            cursor.commit()
             
             if rated_books:
                 placeholders = ','.join(['?' for _ in rated_books])
@@ -532,9 +455,9 @@ async def get_recommendations(request: RecommendationRequest):
                     LIMIT 5
                 """
                 print(f"Executing query with rated_books: {rated_books}")  # Debug log
-                cursor = db.execute(query, rated_books)
+                cursor.execute(query, rated_books)
             else:
-                cursor = db.execute("""
+                cursor.execute("""
                     SELECT 
                         b.id,
                         b.title,
@@ -561,11 +484,11 @@ async def get_recommendations(request: RecommendationRequest):
                 # Ensure book has an ID
                 if not book_dict.get('id'):
                     book_id = generate_book_id(book_dict['title'], book_dict['author'])
-                    db.execute(
+                    cursor.execute(
                         "UPDATE books SET id = ? WHERE title = ? AND author = ?",
                         (book_id, book_dict['title'], book_dict['author'])
                     )
-                    db.commit()
+                    cursor.commit()
                     book_dict['id'] = book_id
 
                 # Parse topics from JSON string if needed
@@ -597,101 +520,49 @@ async def get_recommendations(request: RecommendationRequest):
 
 @app.get("/wishlist")
 async def get_wishlist():
-    """Get all books in the wishlist."""
-    try:
-        with get_db() as db:
-            cursor = db.execute("""
-                SELECT b.*, w.notes, w.timestamp, w.display_order
-                FROM books b
-                JOIN wishlists w ON b.id = w.book_id
-                ORDER BY w.display_order, w.timestamp DESC
-            """)
-            wishlist_books = cursor.fetchall()
-            
-            return {
-                "wishlist": [
-                    {
-                        **convert_db_book_to_model(book).dict(),
-                        "notes": book["notes"],
-                        "added_at": book["timestamp"],
-                        "display_order": book["display_order"]
-                    }
-                    for book in wishlist_books
-                ]
-            }
-    except Exception as e:
-        print(f"Error getting wishlist: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    with get_db_cursor() as cursor:
+        cursor.execute("""
+            SELECT w.*, b.* 
+            FROM wishlist w 
+            JOIN books b ON w.book_id = b.id 
+            ORDER BY w.display_order
+        """)
+        items = cursor.fetchall()
+        return {"wishlist": [dict(item) for item in items]}
 
 @app.post("/wishlist/add")
-async def add_to_wishlist(request: WishlistRequest):
-    """Add a book to the wishlist."""
-    try:
-        with get_db() as db:
-            # Check if book exists
-            cursor = db.execute("SELECT id FROM books WHERE id = ?", (request.book_id,))
-            if not cursor.fetchone():
-                raise HTTPException(status_code=404, detail="Book not found")
-            
-            # Check if book is already in wishlist
-            cursor = db.execute("SELECT id FROM wishlists WHERE book_id = ?", (request.book_id,))
-            if cursor.fetchone():
-                raise HTTPException(status_code=400, detail="Book already in wishlist")
-            
-            # Get max display order
-            cursor = db.execute("SELECT MAX(display_order) as max_order FROM wishlists")
-            result = cursor.fetchone()
-            next_order = (result["max_order"] or 0) + 1
-            
-            # Add to wishlist
-            db.execute(
-                "INSERT INTO wishlists (book_id, notes, timestamp, display_order) VALUES (?, ?, ?, ?)",
-                (request.book_id, request.notes, datetime.now().isoformat(), next_order)
-            )
-            db.commit()
-            return {"message": "Book added to wishlist successfully"}
-    except Exception as e:
-        print(f"Error adding to wishlist: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+async def add_to_wishlist(book_id: str):
+    with get_db_cursor() as cursor:
+        # Get the highest display_order
+        cursor.execute("SELECT MAX(display_order) FROM wishlist")
+        max_order = cursor.fetchone()[0] or 0
+        
+        # Add the new item
+        cursor.execute(
+            "INSERT INTO wishlist (book_id, display_order) VALUES (?, ?)",
+            (book_id, max_order + 1)
+        )
+        cursor.commit()
+        return {"message": "Added to wishlist"}
 
 @app.delete("/wishlist/remove/{book_id}")
 async def remove_from_wishlist(book_id: str):
-    """Remove a book from the wishlist."""
-    try:
-        print(f"Attempting to remove book {book_id} from wishlist")  # Debug log
-        with get_db() as db:
-            # First check if the book is in the wishlist
-            cursor = db.execute("SELECT book_id FROM wishlists WHERE book_id = ?", (book_id,))
-            if not cursor.fetchone():
-                print(f"Book {book_id} not found in wishlist")  # Debug log
-                raise HTTPException(status_code=404, detail="Book not found in wishlist")
-            
-            # Remove from wishlist
-            cursor = db.execute("DELETE FROM wishlists WHERE book_id = ?", (book_id,))
-            print(f"Deleted {cursor.rowcount} rows from wishlist")  # Debug log
-            
-            if cursor.rowcount == 0:
-                print(f"No rows were deleted for book {book_id}")  # Debug log
-                raise HTTPException(status_code=404, detail="Book not found in wishlist")
-            
-            db.commit()
-            print(f"Successfully removed book {book_id} from wishlist")  # Debug log
-            return {"message": "Book removed from wishlist successfully"}
-    except Exception as e:
-        print(f"Error removing book {book_id} from wishlist: {str(e)}")  # Debug log
-        raise HTTPException(status_code=500, detail=str(e))
+    with get_db_cursor() as cursor:
+        cursor.execute("DELETE FROM wishlist WHERE book_id = ?", (book_id,))
+        cursor.commit()
+        return {"message": "Removed from wishlist"}
 
 @app.put("/wishlist/reorder")
 async def reorder_wishlist(orders: List[dict[str, Union[str, int]]]):
     """Update the display order of wishlist items."""
     try:
-        with get_db() as db:
+        with get_db_cursor() as cursor:
             for item in orders:
-                db.execute(
-                    "UPDATE wishlists SET display_order = ? WHERE book_id = ?",
+                cursor.execute(
+                    "UPDATE wishlist SET display_order = ? WHERE book_id = ?",
                     (item["order"], item["book_id"])
                 )
-            db.commit()
+            cursor.commit()
             return {"message": "Wishlist reordered successfully"}
     except Exception as e:
         print(f"Error reordering wishlist: {str(e)}")

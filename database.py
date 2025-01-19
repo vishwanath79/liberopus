@@ -1,16 +1,30 @@
 import sqlite3
+from contextlib import contextmanager
+import os
 from pathlib import Path
+
+DATABASE_URL = os.environ.get('DATABASE_URL', 'books.db')
 
 def get_db():
     """Get a database connection with Row factory."""
-    conn = sqlite3.connect('books.db')
+    conn = sqlite3.connect(DATABASE_URL)
     conn.row_factory = sqlite3.Row
     return conn
 
+@contextmanager
+def get_db_cursor():
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        yield cursor
+        conn.commit()
+    finally:
+        conn.close()
+
 def init_db():
     """Initialize the database."""
-    with get_db() as db:
-        db.execute("""
+    with get_db() as conn:
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS books (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -22,7 +36,7 @@ def init_db():
                 page_count INTEGER
             )
         """)
-        db.commit()
+        conn.commit()
     # Read schema
     schema_path = Path('schema.sql')
     if not schema_path.exists():
