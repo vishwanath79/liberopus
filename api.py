@@ -72,35 +72,6 @@ def import_goodreads_books():
                         if not row.get('Title'):
                             continue
                             
-                        # Determine topics based on bookshelves, title, and description
-                        bookshelves = row.get('Bookshelves', '').lower()
-                        title = row.get('Title', '').lower()
-                        description = row.get('Description', '').lower()
-                        topics = []
-                        
-                        # Technical books - focused on programming and technology
-                        technical_keywords = [
-                            'programming', 'python', 'javascript', 'java', 'c++', 'software',
-                            'coding', 'development', 'web development', 'data science',
-                            'machine learning', 'artificial intelligence', 'computer science',
-                            'algorithms', 'database', 'cloud computing', 'devops', 'engineering',
-                            'software engineering', 'code', 'git', 'agile', 'react', 'nodejs',
-                            'frontend', 'backend', 'full stack', 'api', 'security', 'linux',
-                            'operating system', 'network', 'cybersecurity', 'blockchain',
-                            'technical', 'technology', 'computer'
-                        ]
-                        
-                        # Check if book is technical
-                        is_technical = any(
-                            keyword in bookshelves or keyword in title or keyword in description
-                            for keyword in technical_keywords
-                        )
-                        
-                        if is_technical:
-                            topics.append('Technical')
-                        else:
-                            topics.append('Non-Technical')
-                        
                         # Clean numeric values
                         try:
                             avg_rating = float(clean_csv_value(row.get('Average Rating', '0')))
@@ -124,7 +95,7 @@ def import_goodreads_books():
                             'author': row.get('Author', 'Unknown'),
                             'description': f"A book by {row.get('Author', 'Unknown')}. Published by {row.get('Publisher', 'Unknown')}.",
                             'average_rating': avg_rating,
-                            'topics': json.dumps(topics),
+                            'topics': json.dumps([]),
                             'publication_year': year,
                             'page_count': pages
                         }

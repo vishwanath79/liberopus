@@ -4,7 +4,6 @@ import { useState, useMemo, useEffect } from 'react';
 import { Book, WishlistItem } from '../types/types';
 import { bookApi } from '../api/bookApi';
 import { Footer } from '../components/Footer';
-import { CategoryFilter } from '../components/CategoryFilter';
 import { WishlistDrawer } from '../components/WishlistDrawer';
 
 interface BookCardProps {
@@ -92,7 +91,6 @@ export default function Home() {
     const [recommendations, setRecommendations] = useState<Book[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [userRatings, setUserRatings] = useState<{[key: string]: number}>({});
-    const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
     const [dismissedBooks, setDismissedBooks] = useState<Set<string>>(new Set());
     const [wishlistBooks, setWishlistBooks] = useState<Set<string>>(new Set());
     const [wishlistCount, setWishlistCount] = useState<number>(0);
@@ -100,24 +98,17 @@ export default function Home() {
     const [wishlistItems, setWishlistItems] = useState<WishlistItem[]>([]);
     const [loadingRecommendations, setLoadingRecommendations] = useState(false);
 
-    // Filter books based on selected categories
+    // Filter books based on dismissed status only
     const filteredBooks = useMemo(() => {
-        return books.filter(book => 
-            !dismissedBooks.has(book.id) &&
-            (!selectedCategories.length || 
-             book.topics.some(topic => selectedCategories.includes(topic)))
-        );
-    }, [books, dismissedBooks, selectedCategories]);
+        return books.filter(book => !dismissedBooks.has(book.id));
+    }, [books, dismissedBooks]);
 
-    // Filter recommendations based on selected categories
+    // Filter recommendations based on dismissed status only
     const filteredRecommendations = useMemo(() => {
         return recommendations.filter((book: Book) => 
-            book && book.id && 
-            !dismissedBooks.has(book.id) &&
-            (!selectedCategories.length || 
-             book.topics?.some(topic => selectedCategories.includes(topic)))
+            book && book.id && !dismissedBooks.has(book.id)
         );
-    }, [recommendations, dismissedBooks, selectedCategories]);
+    }, [recommendations, dismissedBooks]);
 
     // Calculate user's average rating
     const averageRating = useMemo(() => {
@@ -248,11 +239,6 @@ export default function Home() {
         }
     };
 
-    // Handle category change
-    const handleCategoryChange = (categories: string[]) => {
-        setSelectedCategories(categories);
-    };
-
     // Handle reordering wishlist
     const handleReorderWishlist = async (orders: { book_id: string; order: number }[]) => {
         try {
@@ -312,12 +298,6 @@ export default function Home() {
 
             {/* Main Content */}
             <main className="max-w-7xl mx-auto py-12 px-4">
-                {/* Category Filter */}
-                <CategoryFilter
-                    selectedCategories={selectedCategories}
-                    onCategoriesChange={handleCategoryChange}
-                />
-
                 {/* Recommendations Section */}
                 <section className="mb-12">
                     <h2 className="text-2xl font-bold text-white mb-6">
