@@ -25,7 +25,7 @@ export const Navbar: React.FC = () => {
                             About
                         </a>
                         <a
-                            href="htthttps://github.com/vishwanath79/liberopus"
+                            href="https://github.com/vishwanath79/liberopus"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-gray-300 hover:text-primary transition-colors"
